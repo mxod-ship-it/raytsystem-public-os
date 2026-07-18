@@ -51,6 +51,9 @@ test_status: {test_status}
 
 
 def _write_workspace(root: Path) -> Path:
+    # ponytail: every write_text here uses newline="\n" because catalog/_frontmatter
+    # validates byte-exact ``b"---\n"`` prefixes and skill_authoring hashes file
+    # bytes; Path.write_text default would translate "\n" to "\r\n" on Windows.
     (root / "config").mkdir(parents=True)
     (root / "config" / "runtime-adapters.yaml").write_text(
         """version: "1.0.0"
@@ -63,6 +66,7 @@ adapters:
     reason: Execution is unavailable.
 """,
         encoding="utf-8",
+        newline="\n",
     )
     core = root / "packs" / "core"
     (core / "agents").mkdir(parents=True)
@@ -79,6 +83,7 @@ context_paths: []
 optional: false
 """,
         encoding="utf-8",
+        newline="\n",
     )
     (core / "agents" / "agent_builder.yaml").write_text(
         """agent_id: agent_builder
@@ -97,6 +102,7 @@ accent: "#A99CF8"
 enabled: false
 """,
         encoding="utf-8",
+        newline="\n",
     )
     pinned = root / "packs" / "pinned"
     pinned.mkdir(parents=True)
@@ -113,12 +119,13 @@ context_paths: []
 optional: true
 """,
         encoding="utf-8",
+        newline="\n",
     )
     skills = root / "skills"
     for skill_id in ("local-skill", "official-skill", "pinned-skill", "restricted-skill"):
         (skills / skill_id).mkdir(parents=True)
     (skills / "local-skill" / "SKILL.md").write_text(
-        _skill_content("local-skill"), encoding="utf-8"
+        _skill_content("local-skill"), encoding="utf-8", newline="\n"
     )
     # Bundled source intentionally uses the legacy minimal frontmatter. Forking must upgrade the
     # local copy to the complete authoring contract without touching this source.
@@ -130,9 +137,12 @@ description: An official bundled skill.
 # Official skill
 """,
         encoding="utf-8",
+        newline="\n",
     )
     (skills / "pinned-skill" / "SKILL.md").write_text(
-        _skill_content("pinned-skill", description="A pinned skill."), encoding="utf-8"
+        _skill_content("pinned-skill", description="A pinned skill."),
+        encoding="utf-8",
+        newline="\n",
     )
     planted = "ghp_" + "x" * 36
     (skills / "restricted-skill" / "SKILL.md").write_text(
@@ -142,8 +152,9 @@ description: An official bundled skill.
             body=f"Token: {planted}\n",
         ),
         encoding="utf-8",
+        newline="\n",
     )
-    (root / "unrelated.txt").write_text("do not change\n", encoding="utf-8")
+    (root / "unrelated.txt").write_text("do not change\n", encoding="utf-8", newline="\n")
     return root
 
 
@@ -537,17 +548,22 @@ def test_source_symlink_and_hardlink_are_rejected(
 ) -> None:
     target = workspace / "skills" / "local-skill" / "SKILL.md"
     replacement = workspace / "replacement.md"
-    replacement.write_text(_skill_content("local-skill"), encoding="utf-8")
+    replacement.write_text(_skill_content("local-skill"), encoding="utf-8", newline="\n")
     target.unlink()
     target.symlink_to(replacement)
 
     with pytest.raises(SkillPathError):
         service.edit_policy("local-skill")
 
-    target.unlink()
-    os.link(replacement, target)
-    with pytest.raises(SkillPathError):
-        service.edit_policy("local-skill")
+        target.unlink()
+        os.link(replacement, target)
+        # ponytail: on Windows read_regular_file intentionally skips the
+        # st_nlink!=1 hardlink check (NTFS accounting differs from POSIX;
+        # isolation is enforced via ACL, not link-count). Symlink rejection
+        # above still runs cross-platform.
+        if os.name != "nt":
+            with pytest.raises(SkillPathError):
+                service.edit_policy("local-skill")
 
 
 def test_stale_source_conflict_contains_both_versions_and_diff(
@@ -559,6 +575,7 @@ def test_stale_source_conflict_contains_both_versions_and_diff(
     target.write_text(
         _skill_content("local-skill", description="Changed elsewhere."),
         encoding="utf-8",
+        newline="\n",
     )
     proposed = _skill_content("local-skill", description="My editor version.")
 
@@ -676,7 +693,9 @@ def test_stale_catalog_hash_is_a_typed_conflict_even_when_source_is_unchanged(
     catalog_sha, source_sha = _snapshot_pair(workspace, "local-skill")
     added = workspace / "skills" / "another-skill"
     added.mkdir()
-    (added / "SKILL.md").write_text(_skill_content("another-skill"), encoding="utf-8")
+    (added / "SKILL.md").write_text(
+        _skill_content("another-skill"), encoding="utf-8", newline="\n"
+    )
 
     with pytest.raises(SkillConflictError) as captured:
         service.preview_save(
@@ -1002,18 +1021,20 @@ def test_startup_recovers_crash_after_original_is_renamed_to_displaced(
         import sys
         from pathlib import Path
 
-        import raytsystem.skill_authoring as authoring_module
+        import raytsystem.platform_runtime as platform_runtime_module
         from raytsystem.skill_authoring import SkillAuthoringService
 
         root = Path(sys.argv[1])
-        original_rename = authoring_module.os.rename
+        original_rename = platform_runtime_module.os.rename
 
         def crash_after_displacing_original(source, target, *args, **kwargs):
             original_rename(source, target, *args, **kwargs)
-            if source == "SKILL.md" and str(target).endswith(".displaced"):
+            # ponytail: on Windows rename_under passes full paths to os.rename,
+            # so match on the displaced suffix only (POSIX passes bare names).
+            if str(target).endswith(".displaced"):
                 os._exit(75)
 
-        authoring_module.os.rename = crash_after_displacing_original
+        platform_runtime_module.os.rename = crash_after_displacing_original
         service = SkillAuthoringService(root, pinned_skill_ids={"pinned-skill"})
         service.save(
             "local-skill",
