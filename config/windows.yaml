@@ -1,0 +1,86 @@
+# Native Windows operation settings for raytsystem.
+#
+# Tracked defaults: machine-independent, no secrets. Per-machine overrides go
+# in config/windows.local.yaml (gitignored). External files — notably the
+# global opencode AGENTS.md — stay at their canonical paths and are READ by
+# reference, never copied into this repository.
+#
+# Path expansion supports ${ENV_VAR} placeholders resolved against the
+# current process environment. Forward slashes work in YAML and in Python
+# pathlib on Windows; use them for portability.
+
+version: "1.0.0"
+
+# --- Environment -------------------------------------------------------------
+# Reference of env vars referenced elsewhere in this file. Editable here so
+# the config is self-documenting.
+environment:
+  userprofile: ${USERPROFILE}
+  localappdata: ${LOCALAPPDATA}
+  appdata: ${APPDATA}
+  username: ${USERNAME}
+
+# --- Agent host integration --------------------------------------------------
+# All paths are READ-ONLY references to files that live OUTSIDE this repo.
+# raytsystem never copies or commits these files.
+agents:
+  opencode:
+    # Global user-level AGENTS.md and skills. Canonical Windows location.
+    global_agents_path: ${USERPROFILE}/.config/opencode/AGENTS.md
+    global_skills_dir: ${USERPROFILE}/.config/opencode/skills
+    global_cache_dir: ${USERPROFILE}/.cache/opencode
+    # Project-level adapter skills shipped with this repo (tracked).
+    project_skills_dir: .opencode/skills
+    # Project-level runtime state (gitignored).
+    project_state_dir: .opencode/state
+  codex:
+    project_skills_dir: .agents/skills
+  claude_code:
+    project_skills_dir: .claude/skills
+
+# --- Native isolation --------------------------------------------------------
+# raytsystem isolation is Python-level: path-traversal guards
+# (security/paths.py), hash-bound immutable ledger, loopback-only web bind.
+# On Windows the OS-level analog is NTFS ACL, not POSIX mode bits.
+isolation:
+  strategy: acl
+  # Restrict workspace ACL to the current user only on first setup.
+  owner_only: true
+  # Apply ACL recursively: (OI)(CI) inheritance flags.
+  inherit_to_children: true
+  # Windows Sandbox (.wsb) is optional and OFF by default. Native run is
+  # safe because isolation is enforced in-process.
+  use_windows_sandbox: false
+  # icacls command template used by the one-time workspace ACL setup.
+  # Documented in WINDOWS.md; not auto-run.
+  acl_setup_command: >
+    icacls "${WORKSPACE_ROOT}" /grant:r "${USERNAME}:(OI)(CI)F"
+    /inheritance:r
+
+# --- Filesystem conventions --------------------------------------------------
+# Informational; helps the agent reason about Windows behavior.
+filesystem:
+  # NTFS ignores POSIX mode bits; os.chmod is effectively a no-op.
+  posix_modes_honored: false
+  # Hardlinks work on NTFS; storage.publish_immutable stays intact.
+  hardlinks_supported: true
+  # Symlinks need Developer Mode or administrator rights.
+  symlinks_require_privilege: true
+  # Directory fsync is a no-op on Windows (NTFS rename durability differs
+  # from ext4). io.py and storage.py short-circuit on os.name == "nt".
+  directory_fsync_honored: false
+
+# --- Extra content roots -----------------------------------------------------
+# Override in config/windows.local.yaml (gitignored). Schema mirrors
+# [[documents.roots]] in config/raytsystem.toml. Use to attach additional
+# folders or drives without editing the tracked toml.
+extra_document_roots: []
+#  - id: personal-projects
+#    path: D:/RT
+#    mode: read_only
+#    kind: code
+
+# --- Optional backup destinations --------------------------------------------
+backup_destinations: []
+#  - id: local-d
+#    path: D:/backups/raytsystem

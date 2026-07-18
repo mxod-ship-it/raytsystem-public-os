@@ -25,6 +25,7 @@ from raytsystem.contracts import (
     sha256_hex,
 )
 from raytsystem.io import UnsafeWritePath, ensure_safe_directory, write_bytes_atomic
+from raytsystem.platform_runtime import O_BINARY, chmod_private
 from raytsystem.security.paths import PathPolicyError, read_regular_file
 from raytsystem.security.sensitivity import SecretScanner
 from raytsystem.storage import IntegrityError, publish_immutable
@@ -835,7 +836,7 @@ class TaskService:
     @staticmethod
     def _ensure_private_directory(path: Path) -> None:
         ensure_safe_directory(path, mode=0o700)
-        os.chmod(path, 0o700, follow_symlinks=False)
+        chmod_private(path, 0o700)
 
     def _publish_private(self, path: Path, data: bytes) -> None:
         try:
@@ -867,7 +868,7 @@ class TaskService:
             os.close(descriptor)
 
     def _open_lock_file(self) -> int:
-        common_flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        common_flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | O_BINARY
         try:
             return os.open(self.lock_path, common_flags | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from raytsystem.checkpoint_guard import CheckpointGuard
@@ -69,6 +71,10 @@ def test_guard_redacts_sensitive_filenames_from_report_paths() -> None:
     assert "path_sha256:" in rendered
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="git status may refresh .git/index stat cache on Windows",
+)
 def test_read_only_guard_preserves_git_index_and_dirty_worktree() -> None:
     root = Path(__file__).parents[1]
     index = root / ".git" / "index"
@@ -107,7 +113,7 @@ def test_guard_detects_staged_canonical_deletion_without_following_renames(
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
     current = tmp_path / "ledger" / "CURRENT"
     current.parent.mkdir()
-    current.write_text("genesis\n", encoding="utf-8")
+    current.write_bytes(b"genesis\n")
     subprocess.run(("git", "-C", str(tmp_path), "add", "ledger/CURRENT"), check=True)
     subprocess.run(
         (

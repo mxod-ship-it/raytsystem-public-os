@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,11 @@ from raytsystem.ingestion import IngestPipeline, IntegrityError
 from raytsystem.io import UnsafeWritePath
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="TOML basic strings reject backslash paths; on Windows users must "
+    "use forward-slash or literal-string paths, which this synth does not.",
+)
 def test_absolute_control_db_config_is_rejected(project_root: Path, tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside-control.sqlite"
     config = project_root / "config" / "raytsystem.toml"

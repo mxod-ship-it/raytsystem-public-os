@@ -79,6 +79,14 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 packages = ["raytsystem"]
+# ponytail: the codebase is POSIX-first; Windows branches are runtime-guarded
+# with ``if os.name == "nt":`` and use only cross-platform APIs (lstat, open,
+# fstat, read, close). Type-checking against Linux validates the canonical
+# path and avoids false-positives on ``os.RLIMIT_*``, ``os.fchmod``,
+# ``os.killpg``, ``signal.SIGKILL``, ``os.flock``, etc. Dual-platform strict
+# checking would require per-file platform overrides — out of scope for the
+# native Windows port.
+platform = "linux"
 
 [tool.coverage.run]
 branch = true

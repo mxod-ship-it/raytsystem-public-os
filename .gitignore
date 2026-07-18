@@ -59,3 +59,51 @@ website/build/
 # These stay on the author's machine but must never ship in the open-source tree.
 CHATGPT_WORK_PROMPT.md
 ops/donors/
+
+# --- Windows-native workflow additions (feature/windows) ---
+
+# Windows Explorer / shell cruft.
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Office / editor lock temp files that sneak into working trees.
+~$*
+.~lock.*#
+
+# IDE / editor local state. Project-shared settings go in committed files.
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local config overrides. Committed config/* stays tracked; *.local.* is private.
+config/*.local.yaml
+config/*.local.toml
+.env.local
+.env.*.local
+
+# Personal planning / scratch notes for this Windows port. Keep them on the
+# workstation, never in the public tree. WINDOWS.md is documentation and stays tracked.
+PLAN.md
+NOTES.md
+WORKLOG.md
+TODO.local.md
+SCRATCH.md
+TROUBLESHOOTING.md
+
+# opencode agent local runtime state (history, cache, session logs).
+# .opencode/skills/ is the deliverable and stays tracked.
+.opencode/state/
+.opencode/cache/
+.opencode/logs/
+.opencode/history/
+.opencode/session/
+.opencode/*.log
+.opencode/.session*
+

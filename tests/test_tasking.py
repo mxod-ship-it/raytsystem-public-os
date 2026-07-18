@@ -99,7 +99,7 @@ def _publish_forged_transition(
     generation_path = service.generations_root / f"{generation.generation_id}.json"
     generation_path.parent.mkdir(parents=True, exist_ok=True)
     generation_path.write_bytes(canonical_json_bytes(generation))
-    service.pointer_path.write_text(generation.generation_id + "\n", encoding="ascii")
+    service.pointer_path.write_bytes((generation.generation_id + "\n").encode("ascii"))
 
 
 def _publish_forged_root(
@@ -178,7 +178,7 @@ def _publish_forged_root(
     generation_path.parent.mkdir(parents=True, exist_ok=True)
     generation_path.write_bytes(canonical_json_bytes(generation))
     service.pointer_path.parent.mkdir(parents=True, exist_ok=True)
-    service.pointer_path.write_text(generation.generation_id + "\n", encoding="ascii")
+    service.pointer_path.write_bytes((generation.generation_id + "\n").encode("ascii"))
 
 
 def test_empty_task_snapshot_is_read_only(tmp_path: Path) -> None:
@@ -503,9 +503,8 @@ def test_hash_valid_generation_with_missing_event_fails_closure(project_root: Pa
         project_root / "ops" / "task-ledger" / "generations" / f"{forged.generation_id}.json"
     )
     generation_path.write_bytes(canonical_json_bytes(forged))
-    (project_root / "ops" / "task-ledger" / "CURRENT").write_text(
-        forged.generation_id + "\n",
-        encoding="ascii",
+    (project_root / "ops" / "task-ledger" / "CURRENT").write_bytes(
+        (forged.generation_id + "\n").encode("ascii"),
     )
 
     with pytest.raises(TaskLedgerError, match="event is unsafe or invalid"):
@@ -647,6 +646,10 @@ def test_task_timestamps_require_timezone_and_monotonic_updates(project_root: Pa
         )
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="NTFS does not honor POSIX mode bits; privacy is enforced via ACL.",
+)
 def test_task_ledger_objects_are_private(project_root: Path) -> None:
     service = TaskService(project_root)
     service.create_task(

@@ -347,7 +347,8 @@ class DocumentIndex:
                 raise DocumentIndexError("Document index integrity check failed")
             connection.close()
             connection = None
-            with temporary.open("rb") as handle:
+            with temporary.open("r+b") as handle:
+                # ponytail: "r+b" so os.fsync has write access on Windows.
                 os.fsync(handle.fileno())
             assert_safe_sqlite_family(self.path)
             os.replace(temporary, self.path)

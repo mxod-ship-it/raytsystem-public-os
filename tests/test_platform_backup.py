@@ -36,7 +36,7 @@ def _seed_workspace(root: Path) -> Path:
     (root / "normalized").mkdir()
     (root / "normalized" / "item.json").write_text('{"ok": true}\n', encoding="utf-8")
     (root / "ledger").mkdir()
-    (root / "ledger" / "CURRENT").write_text("genesis\n", encoding="utf-8")
+    (root / "ledger" / "CURRENT").write_bytes(b"genesis\n")
     (root / "ops" / "runs").mkdir(parents=True)
     (root / "ops" / "runs" / "run.json").write_text('{"run": 1}\n', encoding="utf-8")
     (root / "ops" / "events").mkdir(parents=True)
@@ -240,7 +240,7 @@ def test_export_absolute_path_leak_is_redacted_in_public_only(tmp_path: Path) ->
     private_bundle = root / "bundles" / "private.zip"
     service.create(private_bundle)
     with zipfile.ZipFile(private_bundle) as archive:
-        assert abs_root.encode("utf-8") in archive.read("normalized/note.json")
+        assert abs_root.encode("utf-8") in archive.read("docs/note.md")
 
 
 def test_public_export_removes_secret_files_and_keeps_notices(tmp_path: Path) -> None:

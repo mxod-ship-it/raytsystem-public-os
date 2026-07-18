@@ -58,7 +58,10 @@ def project_root(tmp_path: Path) -> Path:
         json.dumps(genesis, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    (tmp_path / "ledger" / "CURRENT").write_text("genesis\n", encoding="utf-8")
+    # ponytail: ledger/CURRENT is validated byte-exactly via binary read
+    # (read_regular_file); Path.write_text would translate "\n" to "\r\n"
+    # on Windows and trip the strict "{value}\n" invariant.
+    (tmp_path / "ledger" / "CURRENT").write_bytes(b"genesis\n")
     (tmp_path / "inbox").mkdir()
     return tmp_path
 

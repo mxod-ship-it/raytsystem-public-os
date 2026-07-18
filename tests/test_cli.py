@@ -23,7 +23,7 @@ def test_doctor_reports_machine_readable_health(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (tmp_path / "ledger" / "generations").mkdir(parents=True)
-    (tmp_path / "ledger" / "CURRENT").write_text("genesis\n", encoding="utf-8")
+    (tmp_path / "ledger" / "CURRENT").write_bytes(b"genesis\n")
     (tmp_path / "ledger" / "generations" / "genesis.json").write_text(
         '{"generation_id":"genesis","records":{}}\n',
         encoding="utf-8",
@@ -39,7 +39,7 @@ def test_doctor_reports_machine_readable_health(tmp_path: Path) -> None:
 
 def test_status_reports_missing_control_db_without_creating_it(tmp_path: Path) -> None:
     (tmp_path / "ledger").mkdir()
-    (tmp_path / "ledger" / "CURRENT").write_text("genesis\n", encoding="utf-8")
+    (tmp_path / "ledger" / "CURRENT").write_bytes(b"genesis\n")
 
     result = runner.invoke(app, ["status", "--root", str(tmp_path), "--json"])
 

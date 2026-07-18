@@ -10,7 +10,7 @@ from raytsystem.storage import IntegrityError, publish_immutable, read_current_g
 
 
 def test_current_pointer_rejects_path_like_identifier(project_root: Path) -> None:
-    (project_root / "ledger" / "CURRENT").write_text("../outside\n", encoding="ascii")
+    (project_root / "ledger" / "CURRENT").write_bytes(b"../outside\n")
 
     with pytest.raises(IntegrityError, match="Malformed"):
         read_current_generation(project_root)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-import resource
+import os
 import sys
 from typing import Any
 
@@ -19,6 +19,12 @@ def _positive_int(payload: dict[str, Any], key: str, maximum: int) -> int:
 
 
 def _apply_limits(timeout_seconds: int) -> None:
+    # ponytail: Windows has no POSIX rlimit; the worker subprocess itself is
+    # bounded by stdin size, output cap, and the caller's subprocess timeout.
+    if os.name == "nt":  # pragma: no cover - exercised on Windows CI
+        return
+    import resource
+
     limits = (
         (resource.RLIMIT_CPU, timeout_seconds + 1),
         (resource.RLIMIT_FSIZE, 64 * 1024 * 1024),

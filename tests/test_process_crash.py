@@ -11,6 +11,7 @@ import pytest
 from raytsystem.ingestion import IngestPipeline
 
 
+@pytest.mark.skipif(os.name == "nt", reason="SIGKILL crash semantics are POSIX-only")
 @pytest.mark.parametrize(
     ("checkpoint", "pointer_changed"),
     [

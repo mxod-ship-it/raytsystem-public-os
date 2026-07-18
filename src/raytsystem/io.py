@@ -6,6 +6,8 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 
+from raytsystem.platform_runtime import fchmod, fsync_directory
+
 
 class UnsafeWritePath(RuntimeError):
     """Raised when a managed write would traverse a symlink or non-directory."""
@@ -51,17 +53,14 @@ def write_bytes_atomic(path: Path, data: bytes, *, mode: int = 0o644) -> None:
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temp_path = Path(temp_name)
     try:
-        os.fchmod(fd, mode)
+        # platform_runtime: fchmod is POSIX-only; NTFS inherits ACL.
+        fchmod(fd, mode)
         with os.fdopen(fd, "wb", closefd=True) as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(path.parent)
     except BaseException:
         with suppress(OSError):
             os.close(fd)

@@ -6,6 +6,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -140,19 +141,26 @@ def run_bounded(
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except OSError:
-        process.terminate()
+    # ponytail: os.killpg is POSIX-only; Windows lacks process groups, so we
+    # fall back to process.terminate()/kill() directly (matches the pattern in
+    # execution/adapters.py and toolhub/runner.py).
+    if os.name == "posix":
+        with suppress(OSError):
+            os.killpg(process.pid, signal.SIGTERM)
+    else:
+        with suppress(OSError):
+            process.terminate()
     try:
         process.wait(timeout=0.5)
         return
     except subprocess.TimeoutExpired:
         pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except OSError:
-        process.kill()
+    if os.name == "posix":
+        with suppress(OSError):
+            os.killpg(process.pid, signal.SIGKILL)
+    else:
+        with suppress(OSError):
+            process.kill()
     try:
         process.wait(timeout=1.0)
     except subprocess.TimeoutExpired:

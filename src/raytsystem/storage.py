@@ -11,6 +11,13 @@ from typing import Any
 
 from raytsystem.contracts import canonical_json_bytes, sha256_hex
 from raytsystem.io import ensure_safe_parent, write_bytes_atomic
+from raytsystem.platform_runtime import (
+    binary_readonly_flags,
+    fchmod,
+)
+from raytsystem.platform_runtime import (
+    fsync_directory as _fsync_directory,
+)
 from raytsystem.security.paths import PathPolicyError, read_regular_file
 
 
@@ -28,11 +35,9 @@ def validate_generation_id(value: str, *, allow_genesis: bool = True) -> str:
 
 
 def fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    """Re-exported from :mod:`raytsystem.platform_runtime` for legacy callers."""
+
+    _fsync_directory(path)
 
 
 def _recover_owned_temp_links(path: Path, metadata: os.stat_result) -> None:
@@ -63,7 +68,8 @@ def publish_immutable(path: Path, data: bytes, *, mode: int = 0o644) -> bool:
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temp_path = Path(temp_name)
     try:
-        os.fchmod(fd, mode)
+        # platform_runtime: fchmod is POSIX-only; NTFS inherits ACL.
+        fchmod(fd, mode)
         with os.fdopen(fd, "wb", closefd=True) as handle:
             handle.write(data)
             handle.flush()
@@ -71,7 +77,7 @@ def publish_immutable(path: Path, data: bytes, *, mode: int = 0o644) -> bool:
         try:
             os.link(temp_path, path)
         except FileExistsError:
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+            flags = binary_readonly_flags(nofollow=True)
             try:
                 existing_fd = os.open(path, flags)
             except OSError as error:

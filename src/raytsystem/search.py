@@ -198,7 +198,9 @@ class FTS5SearchAdapter:
                 raise SearchUnavailable("FTS5 index integrity check failed")
             connection.close()
             connection = None
-            with temporary.open("rb") as handle:
+            with temporary.open("r+b") as handle:
+                # ponytail: "r+b" rather than "rb" so os.fsync has write access
+                # on Windows; required for FlushFileBuffers to succeed.
                 os.fsync(handle.fileno())
             if self.fail_at == "before_replace":
                 raise RuntimeError("injected index failure before atomic replace")

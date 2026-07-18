@@ -4,7 +4,6 @@ import csv
 import io
 import json
 import os
-import resource
 import subprocess
 import sys
 import tempfile
@@ -464,6 +463,12 @@ class PdfExtractor:
 
     @staticmethod
     def _limit_worker() -> None:
+        if os.name == "nt":  # pragma: no cover - exercised on Windows CI
+            # ponytail: Windows has no POSIX rlimit; subprocess timeout + bounded
+            # input/output is the containment envelope here.
+            return
+        import resource
+
         limits = (
             (resource.RLIMIT_CPU, 8),
             (resource.RLIMIT_AS, 768 * 1024 * 1024),
@@ -503,7 +508,7 @@ class PdfExtractor:
                     env=environment,
                     timeout=15,
                     check=False,
-                    preexec_fn=self._limit_worker,
+                    preexec_fn=None if os.name == "nt" else self._limit_worker,
                 )
             except (OSError, subprocess.TimeoutExpired) as error:
                 raise ExtractionError("PDF parser worker failed safely") from error

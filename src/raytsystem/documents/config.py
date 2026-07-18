@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -174,7 +175,27 @@ def load_document_config(root: Path) -> DocumentConfig:
     )
 
 
+def _directory_identity_windows(root: Path, relative_path: str) -> tuple[int, int] | None:
+    try:
+        current_path = root
+        meta: os.stat_result | None = None
+        for component in Path(relative_path).parts:
+            current_path = current_path / component
+            meta = os.lstat(current_path)
+            if stat.S_ISLNK(meta.st_mode) or not stat.S_ISDIR(meta.st_mode):
+                return None
+        if meta is None:
+            meta = os.lstat(root)
+        return meta.st_dev, meta.st_ino
+    except (FileNotFoundError, OSError):
+        return None
+
+
 def _directory_identity(root: Path, relative_path: str) -> tuple[int, int] | None:
+    if os.name == "nt":
+        # ponytail: NTFS path-based identity walk; os.open on directories raises
+        # PermissionError on Windows, so we use lstat-only without dir_fd=.
+        return _directory_identity_windows(root, relative_path)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     directory = getattr(os, "O_DIRECTORY", 0)
     cloexec = getattr(os, "O_CLOEXEC", 0)
