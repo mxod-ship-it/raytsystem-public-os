@@ -23,8 +23,11 @@ NTFS substitutes for POSIX mode bits).
 
 from __future__ import annotations
 
+import errno
 import os
+import stat as stat_module
 import subprocess
+from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
 
@@ -37,11 +40,21 @@ __all__ = [
     "O_NOFOLLOW",
     "binary_readonly_flags",
     "chmod_private",
+    "descend_directory",
     "fchmod",
     "fsync_directory",
     "fsync_file",
+    "hardlink_under",
     "kill_process_tree",
+    "lstat_under",
+    "mkdir_under",
     "open_file_readonly",
+    "open_under",
+    "rename_under",
+    "replace_under",
+    "rmdir_under",
+    "symlink_under",
+    "unlink_under",
 ]
 
 
@@ -175,6 +188,255 @@ def kill_process_tree(
     except subprocess.TimeoutExpired:
         process.kill()
         return process.wait(timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Path-based helpers (dual-mode replacements for ``dir_fd=`` walks)
+#
+# raytsystem's POSIX code opens a parent directory file descriptor, walks
+# through it with ``dir_fd=`` and ``O_NOFOLLOW`` so symlink escape and
+# TOCTOU swap cannot replace the entry mid-operation. Windows has no
+# ``dir_fd=`` support and ``os.open`` on a directory raises
+# ``PermissionError``; the equivalent invariants are preserved through a
+# per-component ``lstat`` walk that rejects symlinks, plus the atomic
+# guarantees of ``os.replace``. Helpers are dual-mode so call sites stay
+# identical across platforms.
+# ---------------------------------------------------------------------------
+
+
+def _directory_flags() -> int:
+    return os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+
+
+def _open_parent_fd(parent: Path) -> int:
+    return os.open(parent, _directory_flags())
+
+
+def descend_directory(root: Path, components: Sequence[str]) -> Path:
+    """Walk through ``root/components/...`` rejecting symlinks and non-dirs.
+
+    Returns the resolved leaf ``Path``. On POSIX each component is opened
+    with ``O_NOFOLLOW | O_DIRECTORY`` via ``dir_fd=`` for TOCTOU safety;
+    on Windows the same invariant is enforced with a per-component
+    ``lstat`` check (no kernel-level ``O_NOFOLLOW`` exists).
+    """
+
+    if IS_WINDOWS:
+        current = root
+        for component in components:
+            current = current / component
+            try:
+                meta = os.lstat(current)
+            except OSError as error:
+                raise OSError(
+                    errno.ENOTDIR,
+                    "Path parent is missing, non-directory or a symlink",
+                    str(current),
+                ) from error
+            if stat_module.S_ISLNK(meta.st_mode) or not stat_module.S_ISDIR(
+                meta.st_mode
+            ):
+                raise OSError(
+                    errno.ENOTDIR,
+                    "Path parent is missing, non-directory or a symlink",
+                    str(current),
+                )
+        return current
+    current_fd = os.open(root, _directory_flags())
+    opened: list[int] = [current_fd]
+    try:
+        for component in components:
+            next_fd = os.open(
+                component, _directory_flags(), dir_fd=current_fd
+            )
+            opened.append(next_fd)
+            current_fd = next_fd
+        return root.joinpath(*components) if components else root
+    finally:
+        for descriptor in reversed(opened):
+            with suppress(OSError):
+                os.close(descriptor)
+
+
+def open_under(
+    parent: Path, name: str, flags: int, mode: int = 0o777
+) -> int:
+    """Open file ``name`` inside ``parent`` directory, TOCTOU-safe.
+
+    POSIX: opens ``parent`` with ``O_DIRECTORY | O_NOFOLLOW`` and opens
+    ``name`` with ``dir_fd=``. Windows: path-based with an ``lstat``
+    pre-check (no kernel ``O_NOFOLLOW``); ``O_BINARY`` is auto-added.
+    """
+
+    if IS_WINDOWS:
+        target = parent / name
+        # lstat pre-check rejects symlink substitution attacks when the
+        # file already exists. For O_CREAT creates of a new entry there
+        # is nothing to lstat; fall through and let os.open raise the
+        # canonical FileNotFoundError / FileExistsError.
+        try:
+            meta = os.lstat(target)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise error
+        else:
+            if stat_module.S_ISLNK(meta.st_mode):
+                raise OSError(
+                    errno.ELOOP,
+                    "Symlink rejected by path policy",
+                    str(target),
+                )
+        return os.open(target, flags | O_BINARY, mode)
+    parent_fd = _open_parent_fd(parent)
+    try:
+        return os.open(name, flags | O_CLOEXEC, mode, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def lstat_under(parent: Path, name: str) -> os.stat_result:
+    """``os.stat(name, dir_fd=parent, follow_symlinks=False)`` equivalent."""
+
+    if IS_WINDOWS:
+        return os.stat(parent / name, follow_symlinks=False)
+    parent_fd = _open_parent_fd(parent)
+    try:
+        return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    finally:
+        os.close(parent_fd)
+
+
+def unlink_under(parent: Path, name: str) -> None:
+    """``os.unlink(name, dir_fd=parent)`` equivalent."""
+
+    if IS_WINDOWS:
+        os.unlink(parent / name)
+        return
+    parent_fd = _open_parent_fd(parent)
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def rmdir_under(parent: Path, name: str) -> None:
+    """``os.rmdir(name, dir_fd=parent)`` equivalent."""
+
+    if IS_WINDOWS:
+        os.rmdir(parent / name)
+        return
+    parent_fd = _open_parent_fd(parent)
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def mkdir_under(parent: Path, name: str, mode: int = 0o755) -> None:
+    """``os.mkdir(name, mode, dir_fd=parent)`` equivalent.
+
+    Windows: ``os.mkdir`` accepts ``mode`` for symmetry but does not store
+    POSIX bits; ACL inheritance governs access.
+    """
+
+    target = parent / name
+    os.mkdir(target, mode)
+    if IS_POSIX:
+        os.chmod(target, mode, follow_symlinks=False)
+
+
+def replace_under(
+    src_parent: Path,
+    src_name: str,
+    dst_parent: Path,
+    dst_name: str,
+) -> None:
+    """``os.replace(src, dst, src_dir_fd=..., dst_dir_fd=...)`` equivalent."""
+
+    if IS_WINDOWS:
+        os.replace(src_parent / src_name, dst_parent / dst_name)
+        return
+    src_fd = _open_parent_fd(src_parent)
+    try:
+        dst_fd = _open_parent_fd(dst_parent)
+        try:
+            os.replace(
+                src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd
+            )
+        finally:
+            os.close(dst_fd)
+    finally:
+        os.close(src_fd)
+
+
+def rename_under(
+    src_parent: Path,
+    src_name: str,
+    dst_parent: Path,
+    dst_name: str,
+) -> None:
+    """``os.rename(src, dst, src_dir_fd=..., dst_dir_fd=...)`` equivalent.
+
+    Raises ``FileExistsError`` if the destination already exists on Windows
+    (matches POSIX ``renameat2`` ``RENAME_NOREPLACE`` semantics used by the
+    no-replace migration path).
+    """
+
+    if IS_WINDOWS:
+        dst_path = dst_parent / dst_name
+        if os.path.lexists(dst_path):
+            raise FileExistsError(
+                errno.EEXIST,
+                "Destination already exists",
+                str(dst_path),
+            )
+        os.rename(src_parent / src_name, dst_path)
+        return
+    src_fd = _open_parent_fd(src_parent)
+    try:
+        dst_fd = _open_parent_fd(dst_parent)
+        try:
+            os.rename(src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+        finally:
+            os.close(dst_fd)
+    finally:
+        os.close(src_fd)
+
+
+def symlink_under(target: str, parent: Path, link: str) -> None:
+    """``os.symlink(target, link, dir_fd=parent)`` equivalent."""
+
+    if IS_WINDOWS:
+        os.symlink(target, parent / link)
+        return
+    parent_fd = _open_parent_fd(parent)
+    try:
+        os.symlink(target, link, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def hardlink_under(
+    src_parent: Path,
+    src_name: str,
+    dst_parent: Path,
+    dst_name: str,
+) -> None:
+    """``os.link(src, dst, src_dir_fd=..., dst_dir_fd=...)`` equivalent."""
+
+    if IS_WINDOWS:
+        os.link(src_parent / src_name, dst_parent / dst_name)
+        return
+    src_fd = _open_parent_fd(src_parent)
+    try:
+        dst_fd = _open_parent_fd(dst_parent)
+        try:
+            os.link(src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+        finally:
+            os.close(dst_fd)
+    finally:
+        os.close(src_fd)
 
 
 def _self_check() -> None:
