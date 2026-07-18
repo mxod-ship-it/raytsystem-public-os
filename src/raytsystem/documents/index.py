@@ -38,6 +38,7 @@ from raytsystem.documents.subprocesses import (
     run_bounded,
 )
 from raytsystem.io import UnsafeWritePath, ensure_safe_directory
+from raytsystem.platform_runtime import descend_directory
 from raytsystem.platform_store import (
     PlatformStoreError,
     initialize_platform_store,
@@ -1291,29 +1292,11 @@ class DocumentIndex:
 
     def _safe_directory_exists(self, relative_path: str) -> bool:
         pure = PurePosixPath(relative_path)
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
-        directory = getattr(os, "O_DIRECTORY", 0)
-        cloexec = getattr(os, "O_CLOEXEC", 0)
-        root_fd = os.open(self.root, os.O_RDONLY | directory | cloexec)
-        current = root_fd
-        opened: list[int] = []
         try:
-            for component in pure.parts:
-                try:
-                    descriptor = os.open(
-                        component,
-                        os.O_RDONLY | directory | nofollow | cloexec,
-                        dir_fd=current,
-                    )
-                except OSError:
-                    return False
-                opened.append(descriptor)
-                current = descriptor
-            return True
-        finally:
-            for descriptor in reversed(opened):
-                os.close(descriptor)
-            os.close(root_fd)
+            descend_directory(self.root, pure.parts)
+        except OSError:
+            return False
+        return True
 
     def _scan_file(
         self,
