@@ -14,6 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from raytsystem.io import ensure_safe_directory, write_bytes_atomic
+from raytsystem.platform_runtime import (
+    IS_WINDOWS,
+    O_BINARY,
+    descend_directory,
+    fsync_directory,
+    lstat_under,
+    rename_under,
+)
 from raytsystem.security.paths import PathPolicyError, read_regular_file
 
 # Compatibility-only identifiers. They are intentionally isolated here so the
@@ -274,17 +282,25 @@ def _create_backup(
         ensure_safe_directory(backup_dir, mode=0o700)
     except (OSError, RuntimeError) as error:
         raise BrandMigrationError("Backup directory is unsafe") from error
-    backup_fd = _open_relative_directory(root, Path("ops") / "backups")
-    backup_directory_identity = _PathIdentity.from_stat(os.fstat(backup_fd))
+    backup_path = _open_relative_directory(root, Path("ops") / "backups")
+    backup_directory_identity = _PathIdentity.from_stat(os.stat(backup_path))
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     name = f"pre-raytsystem-brand-{timestamp}.zip"
+    target = backup_path / name
     file_fd: int | None = None
     captured: list[_FileSnapshot] = []
     created_identity: _PathIdentity | None = None
     try:
         flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
-        file_fd = os.open(name, flags, 0o600, dir_fd=backup_fd)
+        flags |= O_BINARY
+        # ponytail: O_NOFOLLOW is POSIX-only; on Windows lexists+lstat rejects
+        # symlinked leaf, leaving the O_CREAT path to create the regular file.
+        if IS_WINDOWS:
+            existing = _optional_lstat(target)
+            if existing is not None and stat.S_ISLNK(existing.st_mode):
+                raise BrandMigrationError("Backup artifact target is a symlink")
+        file_fd = os.open(target, flags, 0o600)
         with os.fdopen(file_fd, "w+b", closefd=True) as handle:
             file_fd = None
             with zipfile.ZipFile(handle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -304,7 +320,7 @@ def _create_backup(
             handle.flush()
             os.fsync(handle.fileno())
             created_identity = _PathIdentity.from_stat(os.fstat(handle.fileno()))
-        created = os.stat(name, dir_fd=backup_fd, follow_symlinks=False)
+        created = os.lstat(target)
         if not stat.S_ISREG(created.st_mode) or created.st_nlink != 1:
             raise BrandMigrationError("Backup artifact is unsafe")
         if created_identity is None or (
@@ -317,53 +333,38 @@ def _create_backup(
             created_identity.size,
         ):
             raise BrandMigrationError("Backup artifact changed after creation")
-        os.fsync(backup_fd)
+        fsync_directory(backup_path)
     except (OSError, PathPolicyError, zipfile.BadZipFile) as error:
         raise BrandMigrationError("Brand migration backup failed") from error
     finally:
         if file_fd is not None:
             os.close(file_fd)
-        os.close(backup_fd)
-    verification_fd = _open_relative_directory(root, Path("ops") / "backups")
+    verification_path = _open_relative_directory(root, Path("ops") / "backups")
     try:
-        verified_directory = _PathIdentity.from_stat(os.fstat(verification_fd))
+        verified_directory = _PathIdentity.from_stat(os.stat(verification_path))
         if (verified_directory.device, verified_directory.inode) != (
             backup_directory_identity.device,
             backup_directory_identity.inode,
         ):
             raise BrandMigrationError("Backup directory changed during creation")
-        verified_file = os.stat(name, dir_fd=verification_fd, follow_symlinks=False)
+        verified_file = os.lstat(target)
         if created_identity is None or (verified_file.st_dev, verified_file.st_ino) != (
             created_identity.device,
             created_identity.inode,
         ):
             raise BrandMigrationError("Backup path no longer identifies the created archive")
-    finally:
-        os.close(verification_fd)
+    except OSError as error:
+        raise BrandMigrationError("Backup verification failed") from error
     return backup_dir / name, tuple(captured)
 
 
-def _open_relative_directory(root: Path, relative: Path) -> int:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
+def _open_relative_directory(root: Path, relative: Path) -> Path:
+    """Resolve ``root / relative`` to a Path via a symlink-rejecting walk."""
+
     try:
-        descriptor = os.open(root, flags)
+        return descend_directory(root, relative.parts)
     except OSError as error:
-        raise BrandMigrationError("Workspace root could not be opened safely") from error
-    for component in relative.parts:
-        try:
-            next_descriptor = os.open(component, flags, dir_fd=descriptor)
-        except OSError as error:
-            os.close(descriptor)
-            raise BrandMigrationError("Directory component is missing or unsafe") from error
-        opened = os.fstat(next_descriptor)
-        if not stat.S_ISDIR(opened.st_mode):
-            os.close(next_descriptor)
-            os.close(descriptor)
-            raise BrandMigrationError("Directory component is not a real directory")
-        os.close(descriptor)
-        descriptor = next_descriptor
-    return descriptor
+        raise BrandMigrationError("Directory component is missing or unsafe") from error
 
 
 def _read_regular(
@@ -424,20 +425,17 @@ def _move_verified(
     if source_relative.parent != destination_relative.parent:
         raise BrandMigrationError("Migration move crossed a managed parent boundary")
     kind = "file" if stat.S_ISREG(identity.mode) else "directory"
-    parent_fd = _open_relative_directory(root, source_relative.parent)
-    try:
-        _verify_identity_at(parent_fd, source_relative.name, identity, kind=kind)
-        _rename_no_replace_at(
-            parent_fd,
-            source_relative.name,
-            parent_fd,
-            destination_relative.name,
-        )
-        record = _Move(destination=destination, source=source, identity=identity)
-        moved.append(record)
-        _verify_identity_at(parent_fd, destination_relative.name, identity, kind=kind)
-    finally:
-        os.close(parent_fd)
+    parent_path = _open_relative_directory(root, source_relative.parent)
+    _verify_identity_at(parent_path, source_relative.name, identity, kind=kind)
+    _rename_no_replace_at(
+        parent_path,
+        source_relative.name,
+        parent_path,
+        destination_relative.name,
+    )
+    record = _Move(destination=destination, source=source, identity=identity)
+    moved.append(record)
+    _verify_identity_at(parent_path, destination_relative.name, identity, kind=kind)
 
 
 def _rollback_namespace(root: Path, moved: list[_Move]) -> list[BaseException]:
@@ -449,42 +447,39 @@ def _rollback_namespace(root: Path, moved: list[_Move]) -> list[BaseException]:
             if destination_relative.parent != source_relative.parent:
                 raise BrandMigrationError("Rollback crossed a managed parent boundary")
             kind = "file" if stat.S_ISREG(item.identity.mode) else "directory"
-            parent_fd = _open_relative_directory(root, destination_relative.parent)
-            try:
-                _verify_identity_at(
-                    parent_fd,
-                    destination_relative.name,
-                    item.identity,
-                    kind=kind,
-                )
-                _rename_no_replace_at(
-                    parent_fd,
-                    destination_relative.name,
-                    parent_fd,
-                    source_relative.name,
-                )
-                _verify_identity_at(
-                    parent_fd,
-                    source_relative.name,
-                    item.identity,
-                    kind=kind,
-                )
-            finally:
-                os.close(parent_fd)
+            parent_path = _open_relative_directory(root, destination_relative.parent)
+            _verify_identity_at(
+                parent_path,
+                destination_relative.name,
+                item.identity,
+                kind=kind,
+            )
+            _rename_no_replace_at(
+                parent_path,
+                destination_relative.name,
+                parent_path,
+                source_relative.name,
+            )
+            _verify_identity_at(
+                parent_path,
+                source_relative.name,
+                item.identity,
+                kind=kind,
+            )
         except BaseException as error:
             errors.append(error)
     return errors
 
 
 def _verify_identity_at(
-    directory_fd: int,
+    directory: Path,
     name: str,
     expected: _PathIdentity,
     *,
     kind: str,
 ) -> None:
     try:
-        metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        metadata = lstat_under(directory, name)
     except OSError as error:
         raise BrandMigrationError("Migration namespace entry is unavailable") from error
     if stat.S_ISLNK(metadata.st_mode):
@@ -505,68 +500,88 @@ def _verify_identity_at(
 
 
 def _rename_no_replace_at(
-    source_fd: int,
+    source_parent: Path,
     source_name: str,
-    destination_fd: int,
+    destination_parent: Path,
     destination_name: str,
 ) -> None:
     """Rename one namespace entry without ever replacing the destination."""
 
+    if IS_WINDOWS:
+        try:
+            rename_under(
+                source_parent, source_name, destination_parent, destination_name
+            )
+        except FileExistsError as error:
+            raise BrandMigrationError(
+                "Migration destination already exists"
+            ) from error
+        except OSError as error:
+            raise BrandMigrationError(
+                "Migration namespace move failed"
+            ) from error
+        return
+
     source_bytes = os.fsencode(source_name)
     destination_bytes = os.fsencode(destination_name)
-    if sys.platform == "darwin":
-        libc = ctypes.CDLL(None, use_errno=True)
-        rename = getattr(libc, "renameatx_np", None)
-        if rename is None:  # pragma: no cover - supported macOS API
-            raise BrandMigrationError("No-replace rename is unavailable")
-        rename.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-        rename.restype = ctypes.c_int
-        result = rename(
-            source_fd,
-            source_bytes,
-            destination_fd,
-            destination_bytes,
-            0x00000004,  # RENAME_EXCL
-        )
-    elif sys.platform.startswith("linux"):
-        libc = ctypes.CDLL(None, use_errno=True)
-        rename = getattr(libc, "renameat2", None)
-        if rename is None:  # pragma: no cover - old libc fails closed
-            raise BrandMigrationError("No-replace rename is unavailable")
-        rename.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-        rename.restype = ctypes.c_int
-        result = rename(
-            source_fd,
-            source_bytes,
-            destination_fd,
-            destination_bytes,
-            1,  # RENAME_NOREPLACE
-        )
-    elif os.name == "nt":  # pragma: no cover - exercised on Windows CI
+    parent_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    source_fd = os.open(source_parent, parent_flags)
+    try:
+        destination_fd = os.open(destination_parent, parent_flags)
         try:
-            os.rename(
-                source_name,
-                destination_name,
-                src_dir_fd=source_fd,
-                dst_dir_fd=destination_fd,
-            )
-            return
-        except OSError as error:
-            raise BrandMigrationError("Migration destination already exists") from error
-    else:  # pragma: no cover - unsupported platforms fail closed
-        raise BrandMigrationError("No-replace rename is unavailable on this platform")
+            if sys.platform == "darwin":
+                libc = ctypes.CDLL(None, use_errno=True)
+                rename = getattr(libc, "renameatx_np", None)
+                if rename is None:  # pragma: no cover - supported macOS API
+                    raise BrandMigrationError("No-replace rename is unavailable")
+                rename.argtypes = [
+                    ctypes.c_int,
+                    ctypes.c_char_p,
+                    ctypes.c_int,
+                    ctypes.c_char_p,
+                    ctypes.c_uint,
+                ]
+                rename.restype = ctypes.c_int
+                result = rename(
+                    source_fd,
+                    source_bytes,
+                    destination_fd,
+                    destination_bytes,
+                    0x00000004,  # RENAME_EXCL
+                )
+            elif sys.platform.startswith("linux"):
+                libc = ctypes.CDLL(None, use_errno=True)
+                rename = getattr(libc, "renameat2", None)
+                if rename is None:  # pragma: no cover - old libc fails closed
+                    raise BrandMigrationError("No-replace rename is unavailable")
+                rename.argtypes = [
+                    ctypes.c_int,
+                    ctypes.c_char_p,
+                    ctypes.c_int,
+                    ctypes.c_char_p,
+                    ctypes.c_uint,
+                ]
+                rename.restype = ctypes.c_int
+                result = rename(
+                    source_fd,
+                    source_bytes,
+                    destination_fd,
+                    destination_bytes,
+                    1,  # RENAME_NOREPLACE
+                )
+            else:  # pragma: no cover - unsupported platforms fail closed
+                raise BrandMigrationError(
+                    "No-replace rename is unavailable on this platform"
+                )
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
 
     if result == 0:
         return

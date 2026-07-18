@@ -219,26 +219,16 @@ def test_brand_migration_does_not_replace_concurrent_destination(
     injected = False
 
     def inject_destination(
-        source_fd: int,
+        source_parent: Path,
         source_name: str,
-        destination_fd: int,
+        destination_parent: Path,
         destination_name: str,
     ) -> None:
         nonlocal injected
         if destination_name == "raytsystem.toml" and not injected:
             injected = True
-            descriptor = os.open(
-                destination_name,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-                dir_fd=destination_fd,
-            )
-            try:
-                os.write(descriptor, third_party)
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        real_rename(source_fd, source_name, destination_fd, destination_name)
+            (destination_parent / destination_name).write_bytes(third_party)
+        real_rename(source_parent, source_name, destination_parent, destination_name)
 
     monkeypatch.setattr(
         brand_migration_module,
@@ -266,34 +256,30 @@ def test_brand_migration_does_not_replace_concurrent_rollback_source(
     state_failure_injected = False
 
     def inject_state_destination_and_rollback_source(
-        source_fd: int,
+        source_parent: Path,
         source_name: str,
-        destination_fd: int,
+        destination_parent: Path,
         destination_name: str,
     ) -> None:
         nonlocal state_failure_injected
         if destination_name == ".raytsystem" and not state_failure_injected:
             state_failure_injected = True
-            os.mkdir(destination_name, mode=0o700, dir_fd=destination_fd)
-            config_descriptor = os.open(
-                tmp_path / "config",
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            os.mkdir(destination_parent / destination_name, mode=0o700)
+            # ponytail: O_EXCL raises FileExistsError because agentos.toml already
+            # exists in the legacy workspace; that aborts the in-progress migration
+            # and triggers the rollback path this test exercises.
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            descriptor = os.open(
+                tmp_path / "config" / "agentos.toml",
+                flags,
+                0o600,
             )
             try:
-                descriptor = os.open(
-                    "agentos.toml",
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                    dir_fd=config_descriptor,
-                )
-                try:
-                    os.write(descriptor, third_party)
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
+                os.write(descriptor, third_party)
+                os.fsync(descriptor)
             finally:
-                os.close(config_descriptor)
-        real_rename(source_fd, source_name, destination_fd, destination_name)
+                os.close(descriptor)
+        real_rename(source_parent, source_name, destination_parent, destination_name)
 
     monkeypatch.setattr(
         brand_migration_module,
