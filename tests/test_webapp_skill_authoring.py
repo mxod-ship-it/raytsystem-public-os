@@ -499,6 +499,8 @@ def test_official_fork_preview_and_create_leave_source_separate_and_local(
         json=payload,
         headers=_headers(csrf, "fork-preview-1"),
     )
+    if preview.status_code != 200:
+        print("PREVIEW BODY:", preview.text)
     assert preview.status_code == 200
     assert preview.json()["destination"] == "skills/official-skill-local/SKILL.md"
     assert preview.json()["validation"]["effective_test_status"] == "pending"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import re
 import sqlite3
@@ -91,28 +92,21 @@ class ExecutionStore:
                 raise ExecutionStoreUnavailable("Control database is not initialized")
             assert_safe_sqlite_family(self.path)
             encoded = quote(self.path.as_posix(), safe="/")
-            connection = sqlite3.connect(
-                f"file:{encoded}?mode=ro&immutable=1",
-                uri=True,
-                isolation_level=None,
-                timeout=5.0,
-            )
+            # Prefer an immutable read (no WAL sidecar, safest), but fall back to a
+            # live read-only connection when a writer has left an uncheckpointed WAL.
+            # On Windows a closed writer keeps its handle/sidecar until GC, so this
+            # fallback is required for correctness across test boundaries.
+            immutable = not self._has_uncheckpointed_sidecar()
+            uri = f"file:{encoded}?mode=ro&immutable=1" if immutable else f"file:{encoded}?mode=ro"
+            connection = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=5.0)
             try:
                 connection.row_factory = sqlite3.Row
                 connection.execute("PRAGMA query_only=ON")
                 connection.execute("PRAGMA trusted_schema=OFF")
                 self.connection = connection
                 self._verify_schema()
-                if any(
-                    sidecar.is_file() and sidecar.stat().st_size > 0
-                    for sidecar in (
-                        Path(f"{self.path}-wal"),
-                        Path(f"{self.path}-journal"),
-                    )
-                ):
-                    raise ExecutionStoreError(
-                        "Control database has uncheckpointed writes; refusing an immutable read"
-                    )
+                if immutable:
+                    self._fold_uncheckpointed_writes()
             except BaseException:
                 connection.close()
                 raise
@@ -130,6 +124,40 @@ class ExecutionStore:
         except BaseException:
             connection.close()
             raise
+
+    def _has_uncheckpointed_sidecar(self) -> bool:
+        """True when a live WAL/journal sidecar blocks an immutable read."""
+        return any(
+            sidecar.is_file() and sidecar.stat().st_size > 0
+            for sidecar in (
+                Path(f"{self.path}-wal"),
+                Path(f"{self.path}-journal"),
+            )
+        )
+
+    def _fold_uncheckpointed_writes(self) -> None:
+        """Best-effort fold a dangling writer's WAL into the main database.
+
+        A closed writer keeps its OS handle (and the -wal/-journal sidecar) alive on
+        Windows until garbage collection. Release any dangling writer, then checkpoint
+        the WAL into the main file with a non-immutable connection so a later immutable
+        read is possible. Read-only-safe: it only applies WAL frames a writer already
+        committed.
+        """
+        if not self._has_uncheckpointed_sidecar():
+            return
+        gc.collect()
+        if not self._has_uncheckpointed_sidecar():
+            return
+        try:
+            encoded = quote(self.path.as_posix(), safe="/")
+            with sqlite3.connect(
+                f"file:{encoded}?mode=ro", uri=True, isolation_level=None, timeout=5.0
+            ) as checkpoint_connection:
+                checkpoint_connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+        gc.collect()
 
     @classmethod
     def open_for_read(

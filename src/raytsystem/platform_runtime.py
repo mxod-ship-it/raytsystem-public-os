@@ -24,9 +24,11 @@ NTFS substitutes for POSIX mode bits).
 from __future__ import annotations
 
 import errno
+import gc
 import os
 import stat as stat_module
 import subprocess
+import time
 from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
@@ -368,6 +370,69 @@ def replace_under(
             os.close(dst_fd)
     finally:
         os.close(src_fd)
+
+
+def atomic_replace(src: Path, dst: Path, *, attempts: int = 20) -> None:
+    """``os.replace(src, dst)`` with Windows-friendly retry for transient locks.
+
+    On Windows, real-time antivirus and lingering readers raise
+    ``PermissionError`` (WinError 5/32) when replacing an existing file. A
+    short backoff lets the lock clear instead of failing the whole rebuild.
+    When ``os.replace`` keeps failing, fall back to ``MoveFileExW`` with
+    ``MOVEFILE_REPLACE_EXISTING``; unlike ``rename``, it can replace a file
+    that another handle holds open for shared read/write (sqlite does).
+    """
+
+    if not IS_WINDOWS:
+        os.replace(src, dst)
+        return
+    # ponytail: a just-closed sqlite connection keeps its handle until GC on
+    # Windows; collect first so replace is not blocked by a stale reader/writer.
+    gc.collect()
+    last: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as error:
+            last = error
+            gc.collect()
+            time.sleep(0.05 * (attempt + 1))
+    # ponytail: MoveFileExW can replace a file held open by a shared reader
+    # (sqlite), which plain rename cannot on Windows.
+    if _move_file_replace(str(src), str(dst)):
+        return
+    raise last if last is not None else OSError("atomic_replace failed")
+
+
+def _move_file_replace(src: str, dst: str) -> bool:
+    """Best-effort ``MoveFileExW(src, dst, MOVEFILE_REPLACE_EXISTING)``.
+
+    Returns True on success. Falls back to False if ``ctypes``/kernel32 is
+    unavailable so the caller can surface the original error.
+    """
+
+    try:
+        import ctypes
+    except ImportError:  # pragma: no cover - ctypes is stdlib on every target
+        return False
+    kernel32 = getattr(ctypes.windll, "kernel32", None)
+    if kernel32 is None:
+        return False
+    move_file_ex = kernel32.MoveFileExW
+    move_file_ex.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    move_file_ex.restype = ctypes.c_int
+    MOVEFILE_REPLACE_EXISTING = 0x1
+    result = move_file_ex(src, dst, MOVEFILE_REPLACE_EXISTING)
+    if result:
+        return True
+    last_error = ctypes.GetLastError()
+    # ponytail: only swallow the sharing-violation path; anything else is real.
+    if last_error not in (0, 5, 32, 183):
+        return False
+    # Retry once more after a brief pause in case the reader is releasing.
+    time.sleep(0.1)
+    return bool(move_file_ex(src, dst, MOVEFILE_REPLACE_EXISTING))
 
 
 def rename_under(

@@ -393,12 +393,16 @@ class CatalogService:
     @staticmethod
     def _decode(data: bytes, relative: str) -> str:
         try:
-            return data.decode("utf-8")
+            return data.replace(b"\r\n", b"\n").decode("utf-8")
         except UnicodeDecodeError as error:
             raise CatalogError(f"Catalog text is not UTF-8: {relative}") from error
 
     @classmethod
     def _frontmatter(cls, data: bytes) -> dict[str, Any]:
+        # ponytail: Windows editors/files use CRLF; normalize so cross-platform
+        # SKILL.md files parse. source_sha256 is computed from the raw bytes
+        # elsewhere, so this does not change identity/hashes.
+        data = data.replace(b"\r\n", b"\n")
         if not data.startswith(b"---\n"):
             raise CatalogError("Skill must start with YAML frontmatter")
         boundary = data.find(b"\n---\n", 4)

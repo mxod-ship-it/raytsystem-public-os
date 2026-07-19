@@ -961,7 +961,7 @@ class SkillAuthoringService:
                 "test_status": "pending",
             }
         )
-        boundary = context.data.find(b"\n---\n", 4)
+        boundary = context.data.replace(b"\r\n", b"\n").find(b"\n---\n", 4)
         if boundary < 0:  # pragma: no cover - parser above enforces this
             raise SkillValidationError(
                 [{"field": "frontmatter", "code": "invalid_source_frontmatter"}]

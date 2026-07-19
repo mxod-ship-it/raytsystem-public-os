@@ -148,7 +148,11 @@ class _Walk:
             if _WIKILINK.search(text):
                 wiki += 1
             head = text.lstrip()
-            if head.startswith("---\n") or _FRONTMATTER_ID.search(text[:_MAX_PROBE_BYTES]):
+            if (
+                head.startswith("---\n")
+                or head.startswith("---\r\n")
+                or _FRONTMATTER_ID.search(text[:_MAX_PROBE_BYTES])
+            ):
                 frontmatter += 1
         return sampled, wiki, frontmatter
 

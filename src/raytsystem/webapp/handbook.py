@@ -115,7 +115,9 @@ class HandbookService:
             section = path.parent.name
             try:
                 data = read_regular_file(
-                    self.root, path.relative_to(self.root), max_bytes=16_384
+                    self.root,
+                    path.relative_to(self.root).as_posix(),
+                    max_bytes=16_384,
                 ).data
                 parsed = json.loads(data.decode("utf-8"))
             except (PathPolicyError, OSError, ValueError):

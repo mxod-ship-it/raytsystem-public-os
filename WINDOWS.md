@@ -31,23 +31,29 @@ Tooling:
 |---|---|
 | `uv run ruff check .` | ✅ clean |
 | `uv run mypy` | ✅ clean (`platform = "linux"` in `pyproject.toml`, see below) |
-| `uv run pytest` | ✅ core surfaces green; see "Known gaps" for the residual set |
+| `uv run pytest` | ✅ full suite green on `win32` (POSIX-only link/ffprobe tests skipped) |
 
-## What does not work yet (Phase 3 backlog)
+## What does not work yet
 
-These paths still rely on POSIX-only `dir_fd=` walking and need a path-based
-port. They are gated behind skill authoring and FastAPI recovery code:
+These paths are POSIX-specific and are intentionally skipped on `win32`:
 
-- `tests/test_skill_authoring.py` (~30 tests) — skill transaction writes.
-- `tests/test_webapp*.py` (~50 tests) — UI recovery through the same code path.
 - `tests/test_toolhub_video.py` (2 tests) — the fixture pins `ffprobe` as a
-  Linux ELF binary, which Windows cannot execute (`WinError 193`).
-  Replace with a Windows ffprobe or skip on `os.name == "nt"`.
+  Linux ELF binary, which Windows cannot execute (`WinError 193`). The tests
+  are skipped on `os.name == "nt"`. Install a native Windows ffprobe if you
+  need the tool-hub video path.
+- Symlink / hardlink escape-semantics tests in `test_codegraph_security.py`,
+  `test_execution_workspace.py`, `test_m2_lint_save.py`, and
+  `test_m2_search_query.py` — NTFS symlink/hardlink creation requires
+  Developer Mode or elevation and behaves differently from POSIX; they are
+  skipped on `win32`.
 
-CLI surface affected by the same `dir_fd=` gap: **skill authoring via the
-web UI** (save/fork/recovery). The CLI `raytsystem save` and `raytsystem
-ingest` paths are NOT affected — they go through `io.py` + `storage.py`,
-both already ported.
+Everything else in the test suite (storage, ingestion, query, lint, save,
+tasking, universe, codegraph, documents, recovery, backup, **skill authoring,
+webapp UI recovery**, and the search projection) passes on native Windows.
+
+CLI surface: **skill authoring via the web UI** (save/fork/recovery) works on
+native Windows. The CLI `raytsystem save` and `raytsystem ingest` paths go
+through `io.py` + `storage.py`, both already ported.
 
 ## Install
 
@@ -64,6 +70,14 @@ Requirements:
 - `uv` 0.11+.
 - Optional: Node 22 for UI/docs builds (unchanged from POSIX).
 - Optional: Developer Mode or administrator rights if you need symlinks.
+
+## Launch
+
+Double-click `raytsystem-start.bat` (or run `raytsystem-start.ps1` in
+PowerShell) at the repository root. It runs `uv sync --dev` on first launch,
+then `uv run raytsystem start --host 127.0.0.1 --port 8765`, which opens the
+interface on the loopback and launches your default browser. The web bundle
+under `src/raytsystem/webapp/static` is already built in this tree.
 
 ## Workspace isolation
 
@@ -187,6 +201,10 @@ The complete inventory of `os.name` branches outside `platform_runtime.py`:
 | `documents/config.py:_directory_identity_windows` | `os.open` on a directory raises `PermissionError` on Windows; lstat-only walk returns `(st_dev, st_ino)`. |
 | `extractors.py`, `codegraph/worker.py` | Lazy `import resource` inside `_apply_limits`; early-return on `nt`. |
 | `execution/adapters.py`, `toolhub/runner.py` | Pre-existing POSIX/else branches for process-tree kill — unchanged. |
+| `platform_runtime.py:atomic_replace` | Windows `os.replace` raises on a still-open handle; retry with `gc.collect()` then `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`. |
+| `documents/index.py`, `search.py` | `_ScopedConnection` closes + `gc.collect()` on `__exit__`; `rebuild()` `gc.collect()` before `atomic_replace`. |
+| `execution/store.py` | `open_for_read` falls back from `immutable=1` to a live `mode=ro` connection when a writer left a WAL sidecar (Windows handle lifetime). |
+| `catalog.py`, `skill_authoring.py` | CRLF-normalized frontmatter parsing so `\\r\\n` files hash and validate identically to `\\n`. |
 
 ## Known pitfalls
 
@@ -255,7 +273,6 @@ uv run pytest
 ```
 
 Expected on a clean checkout after `uv sync --dev`: ruff/mypy clean,
-`raytsystem doctor` reports no platform-specific error, full `pytest`
-passes the core surfaces (storage, ingestion, query, lint, save, tasking,
-universe, codegraph, documents, recovery, backup) and leaves the Phase 3
-set documented above as known failures.
+`raytsystem doctor` reports no platform-specific error, and the full
+`pytest` run passes on native Windows (the POSIX-only symlink/hardlink and
+ffprobe tests are skipped on `win32`).

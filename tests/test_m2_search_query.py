@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import socket
 import sqlite3
 import subprocess
@@ -145,6 +146,10 @@ def test_index_logical_tamper_is_detected_and_rebuilt_from_canonical_records(
             ("FORGED INDEX FACT", "FORGED INDEX FACT"),
         )
         connection.commit()
+    # ponytail: on Windows a closed sqlite connection keeps its file handle
+    # alive until the object is collected; drop the name so the rebuild's
+    # atomic replace of index.sqlite is not blocked by ACCESS DENIED.
+    del connection
 
     assert not adapter.is_current()
     result = QueryService(project_root).query("Canonical statement survives")
@@ -162,6 +167,9 @@ def test_fts_shadow_table_tamper_is_detected_before_a_false_gap_can_escape(
     with sqlite3.connect(adapter.path) as connection:
         connection.execute("DELETE FROM documents_fts")
         connection.commit()
+    # ponytail: release the Windows file handle before the rebuild replaces
+    # index.sqlite (see test_index_logical_tamper_is_detected... for detail).
+    del connection
 
     assert not adapter.is_current()
     result = QueryService(project_root).query("FTS shadow rows")
@@ -247,6 +255,7 @@ def test_projection_rejects_unsafe_graph_target_without_touching_its_referent(
 
 
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink escape semantics are POSIX-specific")
 def test_projection_never_reads_linked_promotion_events(
     project_root: Path,
     link_kind: str,

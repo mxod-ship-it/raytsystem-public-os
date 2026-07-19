@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from typing import Protocol
 from raytsystem.contracts import canonical_json_bytes, sha256_hex
 from raytsystem.corpus import ActiveCorpus
 from raytsystem.derived import assert_safe_sqlite_family
+from raytsystem.platform_runtime import atomic_replace
 from raytsystem.security.paths import PathPolicyError, read_regular_file
 from raytsystem.storage import fsync_directory, read_current_generation
 
@@ -198,6 +200,9 @@ class FTS5SearchAdapter:
                 raise SearchUnavailable("FTS5 index integrity check failed")
             connection.close()
             connection = None
+            # ponytail: sqlite3 may keep the file handle alive until GC on
+            # Windows; force collection so the replace is not blocked.
+            gc.collect()
             with temporary.open("r+b") as handle:
                 # ponytail: "r+b" rather than "rb" so os.fsync has write access
                 # on Windows; required for FlushFileBuffers to succeed.
@@ -207,7 +212,7 @@ class FTS5SearchAdapter:
             if read_current_generation(self.root) != snapshot.generation.generation_id:
                 raise StaleIndexError("ledger/CURRENT changed during index rebuild")
             assert_safe_sqlite_family(self.path)
-            os.replace(temporary, self.path)
+            atomic_replace(temporary, self.path)
             fsync_directory(self.path.parent)
             return IndexBuildResult(
                 generation_id=snapshot.generation.generation_id,
@@ -217,7 +222,7 @@ class FTS5SearchAdapter:
                 document_count=len(rows),
                 path=self.path.relative_to(self.root).as_posix(),
             )
-        except sqlite3.Error as error:
+        except (sqlite3.Error, OSError) as error:
             raise SearchUnavailable("SQLite FTS5 index build failed") from error
         finally:
             if connection is not None:
@@ -559,7 +564,7 @@ class FTS5SearchAdapter:
         ]
         return sha256_hex(canonical_json_bytes({"documents": documents, "documents_fts": fts_rows}))
 
-    def _read_connection(self) -> sqlite3.Connection:
+    def _read_connection(self) -> _ScopedConnection:
         assert_safe_sqlite_family(self.path)
         if not self.path.is_file():
             raise SearchUnavailable("FTS5 index is unavailable")
@@ -572,7 +577,28 @@ class FTS5SearchAdapter:
         connection.execute("PRAGMA query_only=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("PRAGMA busy_timeout=1000")
-        return connection
+        return _ScopedConnection(connection)
+
+
+class _ScopedConnection:
+    """sqlite3 read connection that releases its OS handle promptly on exit.
+
+    On Windows, ``sqlite3.Connection.close()`` keeps the underlying file
+    handle alive until garbage collection, which blocks ``os.replace``/unlink
+    of the same database file. ``__exit__`` forces a collection so callers
+    (rebuild, tests) can immediately replace the file.
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self._connection
+
+    def __exit__(self, *_exc: object) -> None:
+        self._connection.close()
+        # ponytail: release the Windows file handle before GC would.
+        gc.collect()
 
 
 class QmdSearchAdapter:

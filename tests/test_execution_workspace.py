@@ -425,6 +425,7 @@ def test_graph_disabled_allows_materialization_free_fixture_without_projection(
     assert not (project_root / ".raytsystem" / "graph").exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink escape semantics are POSIX-specific")
 def test_existing_hardlinked_context_is_rejected(project_root: Path) -> None:
     task_id = _prepared_project(project_root)
     manager = _manager(project_root)

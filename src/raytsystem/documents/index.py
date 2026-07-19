@@ -9,6 +9,7 @@ import re
 import sqlite3
 import stat
 import tempfile
+import gc
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from typing import Any, Literal
 
 from raytsystem.contracts import canonical_json_bytes, derive_id, sha256_hex
 from raytsystem.derived import assert_safe_sqlite_family
+from raytsystem.platform_runtime import atomic_replace
 from raytsystem.documents.config import load_document_config
 from raytsystem.documents.contracts import (
     DocumentConfig,
@@ -92,6 +94,27 @@ class _ScannedDocument:
     relative_path: str
     first_seen_at: str
     size_bytes: int
+
+
+class _ScopedConnection:
+    """sqlite3 read connection that releases its OS handle promptly on exit.
+
+    On Windows, ``sqlite3.Connection.close()`` keeps the underlying file
+    handle alive until garbage collection, which blocks ``os.replace``/unlink
+    of the same database file. ``__exit__`` forces a collection so callers
+    (rebuild, tests) can immediately replace the file.
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self._connection
+
+    def __exit__(self, *_exc: object) -> None:
+        self._connection.close()
+        # ponytail: release the Windows file handle before GC would.
+        gc.collect()
 
 
 def _now() -> str:
@@ -348,11 +371,14 @@ class DocumentIndex:
                 raise DocumentIndexError("Document index integrity check failed")
             connection.close()
             connection = None
+            # ponytail: sqlite3 may keep the file handle alive until GC on
+            # Windows; force collection so os.replace is not blocked.
+            gc.collect()
             with temporary.open("r+b") as handle:
                 # ponytail: "r+b" so os.fsync has write access on Windows.
                 os.fsync(handle.fileno())
             assert_safe_sqlite_family(self.path)
-            os.replace(temporary, self.path)
+            atomic_replace(temporary, self.path)
             fsync_directory(self.path.parent)
         except (OSError, sqlite3.Error, UnsafeWritePath) as error:
             raise DocumentIndexError("Document index rebuild failed") from error
@@ -362,7 +388,11 @@ class DocumentIndex:
             temporary.unlink(missing_ok=True)
             for suffix in ("-journal", "-wal", "-shm"):
                 Path(f"{temporary}{suffix}").unlink(missing_ok=True)
-        return self.status()
+        # ponytail: status() opens a read connection; release it before returning
+        # so Windows callers can immediately operate on self.path.
+        result = self.status()
+        gc.collect()
+        return result
 
     def refresh(self, paths: tuple[str, ...] = ()) -> dict[str, Any]:
         """Refresh specified files when possible; a missing/stale DB rebuilds safely."""
@@ -1935,7 +1965,7 @@ class DocumentIndex:
                 return None
         return result
 
-    def _read_connection(self) -> sqlite3.Connection:
+    def _read_connection(self) -> _ScopedConnection:
         try:
             assert_safe_sqlite_family(self.path)
         except (OSError, UnsafeWritePath) as error:
@@ -1951,7 +1981,7 @@ class DocumentIndex:
         connection.execute("PRAGMA query_only=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("PRAGMA busy_timeout=1000")
-        return connection
+        return _ScopedConnection(connection)
 
     def _write_connection(self) -> sqlite3.Connection:
         try:

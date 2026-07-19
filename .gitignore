@@ -107,3 +107,15 @@ TROUBLESHOOTING.md
 .opencode/*.log
 .opencode/.session*
 
+# Git merge / rebase conflict artifacts (transient, never tracked).
+*.orig
+*.rej
+*.BACKUP.*
+*.BASE.*
+*.LOCAL.*
+*.REMOTE.*
+REBASE_HEAD
+MERGE_HEAD
+CHERRY_PICK_HEAD
+.patch.diff
+
