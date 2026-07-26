@@ -1108,7 +1108,23 @@ def _extract_sql(file: DetectedFile) -> FileExtraction:
     )
 
 
+def _normalize_file(file: DetectedFile) -> DetectedFile:
+    """Normalize paths to POSIX for cross-platform graph compatibility."""
+    posix_path = file.path.replace("\\", "/")
+    if posix_path == file.path:
+        return file
+    return DetectedFile(
+        path=posix_path,
+        data=file.data,
+        content_sha256=file.content_sha256,
+        size_bytes=file.size_bytes,
+        mtime_ns=file.mtime_ns,
+        language=file.language,
+    )
+
+
 def extract_file(file: DetectedFile) -> FileExtraction:
+    file = _normalize_file(file)
     if file.language == "python":
         return _extract_python(file)
     if file.language in {"javascript", "typescript", "tsx"}:
@@ -1234,11 +1250,11 @@ def extract_file_isolated(
         "max_edges": max_edges,
         "timeout_seconds": timeout_seconds,
     }
-    environment = {
+    environment = os.environ.copy()
+    environment.update({
         "LANG": "C.UTF-8",
-        "PATH": os.environ.get("PATH", ""),
         "PYTHONHASHSEED": "0",
-    }
+    })
     try:
         completed = subprocess.run(
             (sys.executable, "-I", "-m", "raytsystem.codegraph.worker"),

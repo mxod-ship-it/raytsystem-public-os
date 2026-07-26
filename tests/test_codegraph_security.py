@@ -44,7 +44,9 @@ parser_timeout_seconds = 10
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink escape semantics are POSIX-specific")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_code_graph_rejects_traversal_symlink_and_hardlink(project_root: Path) -> None:
     _configure(project_root)
     outside = project_root.parent / "outside.py"

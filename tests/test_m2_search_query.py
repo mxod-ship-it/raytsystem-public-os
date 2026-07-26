@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import socket
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -255,7 +255,9 @@ def test_projection_rejects_unsafe_graph_target_without_touching_its_referent(
 
 
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink escape semantics are POSIX-specific")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_projection_never_reads_linked_promotion_events(
     project_root: Path,
     link_kind: str,

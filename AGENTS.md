@@ -7,6 +7,7 @@
 - LLM output is a proposal; only validated promotion changes canonical knowledge.
 - One writer per partition; preserve unrelated user changes.
 - No external send, publish, upload, push, payment, deletion, private-corpus egress or real-corpus promotion without explicit scoped approval.
+- Commits, pushes, and git operations that change repo state are performed by the user only. The agent may suggest, prepare diffs, and show what to commit — but never runs `git commit`, `git push`, `git merge`, or `git tag` on its own. Local scratch markers for agent-internal tracking are permitted.
 - Run relevant tests, lint and type checks before a green checkpoint.
 
 ## Commands
@@ -53,3 +54,15 @@ workflow/tasking/agents/skills/packs, security/approvals, install/migration/back
 observable behavior), update the documentation in the same change set. The full rule lives in the
 `Documentation synchronization` section of `CLAUDE.md`; the build/publish procedure is
 `website/docs/development/documentation.md`.
+
+## Project tracking files
+
+Three files track project state. **Never rewrite them from scratch — always append with a date.**
+
+| File | Purpose | Update rule |
+|---|---|---|
+| `CHANGELOG.md` | Что сделано (история изменений) | Дописать новую секцию в конец с датой `## [тег] - YYYY-MM-DD`. Не переписывать существующие записи. |
+| `TODO.md` | Что делать (задачи) | Дописать новые задачи в конец соответствующей секции. Отмечать done через `[x]`, не удалять. Обновлять дату в шапке `Последнее обновление: YYYY-MM-DD`. |
+| `ROADMAP.md` | Куда идём (стратегия) | Дописывать новые направления в конец. Не удалять существующие. Статус обновлять in-place (кратко), детали — в `TODO.md`. |
+
+**Правило для всех трёх:** при любом обновлении ставить дату. Не затирать и не реорганизовывать чужие записи — только дополнять.

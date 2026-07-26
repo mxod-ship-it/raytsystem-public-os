@@ -483,12 +483,12 @@ class PdfExtractor:
 
     def extract(self, data: bytes, *, source_path: str) -> Extraction:
         del source_path
-        environment = {
-            "PATH": os.defpath,
+        environment = os.environ.copy()
+        environment.update({
             "PYTHONHASHSEED": "0",
             "PYTHONIOENCODING": "utf-8",
             "NO_PROXY": "*",
-        }
+        })
         worker_command = [sys.executable, "-I", "-m", "raytsystem.pdf_worker"]
         with tempfile.TemporaryDirectory(prefix="raytsystem-pdf-") as temporary_directory:
             if self.containment_profile() == "macos_restricted_v1":

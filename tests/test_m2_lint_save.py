@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import socket
 import sqlite3
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -90,7 +90,9 @@ def test_query_blocks_factual_output_when_citation_chain_is_corrupt(project_root
 
 
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink escape semantics are POSIX-specific")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_lint_never_dereferences_linked_knowledge_pages(
     project_root: Path,
     link_kind: str,
@@ -115,7 +117,9 @@ def test_lint_never_dereferences_linked_knowledge_pages(
 
 
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink escape semantics are POSIX-specific")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_lint_never_dereferences_linked_run_manifests(
     project_root: Path,
     link_kind: str,
@@ -217,7 +221,9 @@ def test_save_rejects_secret_before_staging(project_root: Path) -> None:
 
 
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink escape semantics are POSIX-specific")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_repeated_save_rejects_linked_preview_without_touching_the_referent(
     project_root: Path,
     link_kind: str,
@@ -270,7 +276,9 @@ def test_save_rejects_symlinked_output_parent_without_external_write(
 
 
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink escape semantics are POSIX-specific")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_save_rejects_linked_control_database_without_mutating_the_referent(
     project_root: Path,
     link_kind: str,

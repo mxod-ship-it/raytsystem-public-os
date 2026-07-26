@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import heapq
 import json
@@ -9,7 +10,6 @@ import re
 import sqlite3
 import stat
 import tempfile
-import gc
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,7 +19,6 @@ from typing import Any, Literal
 
 from raytsystem.contracts import canonical_json_bytes, derive_id, sha256_hex
 from raytsystem.derived import assert_safe_sqlite_family
-from raytsystem.platform_runtime import atomic_replace
 from raytsystem.documents.config import load_document_config
 from raytsystem.documents.contracts import (
     DocumentConfig,
@@ -40,7 +39,7 @@ from raytsystem.documents.subprocesses import (
     run_bounded,
 )
 from raytsystem.io import UnsafeWritePath, ensure_safe_directory
-from raytsystem.platform_runtime import descend_directory
+from raytsystem.platform_runtime import atomic_replace, descend_directory
 from raytsystem.platform_store import (
     PlatformStoreError,
     initialize_platform_store,

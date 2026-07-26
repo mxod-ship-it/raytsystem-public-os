@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from raytsystem.documents.index import DocumentIndex
 
 

@@ -10,4 +10,7 @@ if not exist "%ROOT%.venv\" (
 )
 set "RAYTSYSTEM_PLATFORM_ASSUME=windows"
 uv run raytsystem start --host 127.0.0.1 --port 8765
+echo.
+echo Press any key to exit...
+pause >nul
 endlocal
