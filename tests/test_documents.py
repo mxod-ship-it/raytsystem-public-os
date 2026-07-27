@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -320,6 +321,7 @@ def test_markdown_relative_links_resolve_per_source_folder(tmp_path: Path) -> No
         assert target["path"] == str(PurePosixPath(note["path"]).parent / "images/picture.md")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_symlink_is_never_indexed(tmp_path: Path) -> None:
     root = _workspace(tmp_path)
     outside = tmp_path / "outside.md"

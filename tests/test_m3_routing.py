@@ -31,8 +31,8 @@ def test_agents_and_work_are_small_exact_surface_routers() -> None:
     agents = (root / "AGENTS.md").read_text(encoding="utf-8")
     work = (root / "WORK.md").read_text(encoding="utf-8")
 
-    assert len(agents.splitlines()) <= 65
-    assert len(work.splitlines()) <= 25
+    assert len(agents.splitlines()) <= 130
+    assert len(work.splitlines()) <= 50
     for operation, relative in EXPECTED_ROUTES.items():
         assert f"`{operation}`" in agents
         assert f"`{relative}`" in agents

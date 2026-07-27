@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -162,6 +163,7 @@ def test_private_backup_rechecks_limits_after_platform_snapshot(
     assert not destination.exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_private_backup_rejects_symlinked_platform_store_before_publication(
     tmp_path: Path,
 ) -> None:

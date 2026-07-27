@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,9 @@ def test_catalog_rejects_context_outside_allowlisted_roots(tmp_path: Path) -> No
         CatalogService(tmp_path).load()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_catalog_rejects_symlinked_skill_directory(tmp_path: Path) -> None:
     _write_catalog_baseline(tmp_path)
     target = tmp_path / "real-skill"

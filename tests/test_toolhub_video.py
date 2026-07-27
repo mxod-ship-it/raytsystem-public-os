@@ -507,6 +507,7 @@ def test_download_uses_one_canonical_fragment_free_url(tmp_path: Path) -> None:
     assert invocation.stdin.count(b"\n") == 1
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_stage_symlink_is_rejected_before_writing(tmp_path: Path) -> None:
     hub, _ = _hub(tmp_path)
     source = VideoSource(kind=SourceKind.TRANSCRIPT, value="symlink fixture")
@@ -653,6 +654,7 @@ def test_cached_status_reasons_frame_metadata_and_versions_are_anchored(
         hub.probe(probe_request)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_staging_root_replacement_is_rejected(tmp_path: Path) -> None:
     hub, _ = _hub(tmp_path)
     original_root = hub.staging_root

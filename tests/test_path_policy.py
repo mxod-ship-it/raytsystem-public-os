@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,9 @@ def test_path_escape_shapes_are_rejected(project_root: Path, candidate: str) -> 
         read_regular_file(project_root, candidate, max_bytes=1024)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_symlink_parent_and_final_component_are_rejected(project_root: Path) -> None:
     outside = project_root.parent / "outside-secret.txt"
     outside.write_text("secret", encoding="utf-8")

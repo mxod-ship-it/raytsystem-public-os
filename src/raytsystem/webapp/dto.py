@@ -182,3 +182,24 @@ class SkillForkRequest(VersionedApiRequest):
     new_skill_id: SkillIdentifier
     expected_catalog_sha256: Sha256Digest
     expected_source_sha256: Sha256Digest
+
+
+class SkillCreatePreviewRequest(VersionedApiRequest):
+    new_skill_id: SkillIdentifier
+    expected_catalog_sha256: Sha256Digest
+
+
+class SkillCreateRequest(BaseModel):
+    """Exact Markdown for a brand-new pack_local skill plus catalog CAS fence."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+    request_version: Literal["1.0"] = "1.0"
+    new_skill_id: SkillIdentifier
+    content: str = Field(min_length=1, max_length=64 * 1024)
+    expected_catalog_sha256: Sha256Digest
+
+
+class SkillArchiveRequest(VersionedApiRequest):
+    expected_catalog_sha256: Sha256Digest
+    expected_source_sha256: Sha256Digest

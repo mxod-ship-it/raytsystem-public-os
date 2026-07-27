@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -76,6 +77,9 @@ def test_managed_cwd_rejects_escape_external_and_mismatched_policy(tmp_path: Pat
         )
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_managed_cwd_fails_closed_if_component_becomes_symlink(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     outside = tmp_path / "outside"

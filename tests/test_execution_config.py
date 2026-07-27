@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,9 @@ def test_unknown_feature_flag_is_rejected(tmp_path: Path) -> None:
         load_execution_config(tmp_path)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink/hardlink: POSIX-only"
+)
 def test_config_symlink_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "config").mkdir()
     target = tmp_path / "actual.toml"

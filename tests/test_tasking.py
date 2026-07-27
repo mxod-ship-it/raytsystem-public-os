@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -667,6 +668,7 @@ def test_task_ledger_objects_are_private(project_root: Path) -> None:
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks unavailable")
 def test_symlinked_writer_lock_is_rejected(project_root: Path) -> None:
     lock_root = project_root / "ops" / "locks"

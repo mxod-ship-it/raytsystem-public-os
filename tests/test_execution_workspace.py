@@ -353,6 +353,7 @@ else:
     assert confirmed is not None and confirmed.source_sha256 == source_sha256
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_workspace_rejects_traversal_and_symlinked_managed_root(
     project_root: Path,
 ) -> None:

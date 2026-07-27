@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ def test_absolute_control_db_config_is_rejected(project_root: Path, tmp_path: Pa
     assert not outside.exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_symlinked_normalized_root_cannot_escape_workspace(
     project_root: Path,
     tmp_path: Path,
@@ -47,6 +49,7 @@ def test_symlinked_normalized_root_cannot_escape_workspace(
     assert not list(outside.iterdir())
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_symlinked_ops_root_cannot_redirect_control_db(project_root: Path, tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside-ops"
     outside.mkdir(exist_ok=True)

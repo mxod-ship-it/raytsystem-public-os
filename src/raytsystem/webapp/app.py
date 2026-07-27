@@ -76,6 +76,9 @@ from raytsystem.webapp.dto import (
     ExecutionWorkspaceRequest,
     OnboardingApplyRequest,
     OnboardingUninstallRequest,
+    SkillArchiveRequest,
+    SkillCreatePreviewRequest,
+    SkillCreateRequest,
     SkillForkPreviewRequest,
     SkillForkRequest,
     SkillSaveRequest,
@@ -1414,6 +1417,59 @@ def create_app(
         )
         if not destination_existed:
             provider.invalidate()
+        return result
+
+    @app.post("/api/v1/skills/preview/create")
+    def preview_skill_create(
+        payload: SkillCreatePreviewRequest,
+        _idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+        _session: Annotated[SessionRecord, Depends(require_session)],
+        content: str = "",
+    ) -> dict[str, Any]:
+        return skill_authoring.preview_create(
+            payload.new_skill_id,
+            content=content,
+            expected_catalog_sha256=payload.expected_catalog_sha256,
+        )
+
+    @app.post("/api/v1/skills")
+    def create_skill(
+        payload: SkillCreateRequest,
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+        _session: Annotated[SessionRecord, Depends(require_session)],
+    ) -> dict[str, Any]:
+        safe_id = _safe_public_id(payload.new_skill_id)
+        with skill_authoring.catalog_read_guard():
+            destination_existed = (
+                CatalogService(resolved_root).load().skill(safe_id) is not None
+            )
+        result = skill_authoring.create_blank(
+            safe_id,
+            content=payload.content,
+            expected_catalog_sha256=payload.expected_catalog_sha256,
+            idempotency_key=idempotency_key,
+            actor_id="user_local_web",
+        )
+        if not destination_existed:
+            provider.invalidate()
+        return result
+
+    @app.post("/api/v1/skills/{skill_id}/archive")
+    def archive_skill(
+        skill_id: str,
+        payload: SkillArchiveRequest,
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+        _session: Annotated[SessionRecord, Depends(require_session)],
+    ) -> dict[str, Any]:
+        safe_id = _safe_public_id(skill_id)
+        result = skill_authoring.archive(
+            safe_id,
+            expected_catalog_sha256=payload.expected_catalog_sha256,
+            expected_source_sha256=payload.expected_source_sha256,
+            idempotency_key=idempotency_key,
+            actor_id="user_local_web",
+        )
+        provider.invalidate()
         return result
 
     @app.get("/api/v1/instructions/{document_id}")

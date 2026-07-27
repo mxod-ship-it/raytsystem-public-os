@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import zipfile
 from pathlib import Path
 
@@ -74,6 +75,7 @@ def test_brand_migration_allows_independent_already_current_config(tmp_path: Pat
     assert (tmp_path / "config" / "raytsystem.toml").is_file()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_brand_migration_rejects_symlinked_legacy_state_before_backup(tmp_path: Path) -> None:
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "agentos.toml").write_text('schema_version = "1.4.0"\n')
@@ -92,6 +94,7 @@ def test_brand_migration_rejects_symlinked_legacy_state_before_backup(tmp_path: 
     assert marker.read_text() == '{"agentos_version":"external"}'
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_brand_migration_rejects_symlinked_config_component_before_read(
     tmp_path: Path,
 ) -> None:
@@ -109,6 +112,7 @@ def test_brand_migration_rejects_symlinked_config_component_before_read(
     assert not (tmp_path / "ops").exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 @pytest.mark.parametrize("component", ["ops", "backups"])
 def test_brand_migration_rejects_symlinked_backup_components_without_external_write(
     tmp_path: Path,
@@ -131,6 +135,7 @@ def test_brand_migration_rejects_symlinked_backup_components_without_external_wr
     assert not (tmp_path / ".raytsystem").exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_brand_migration_rejects_nested_state_symlink_before_backup(tmp_path: Path) -> None:
     _legacy_workspace(tmp_path)
     outside = tmp_path.parent / f"{tmp_path.name}-outside-nested"
@@ -296,6 +301,7 @@ def test_brand_migration_does_not_replace_concurrent_rollback_source(
     assert (tmp_path / ".raytsystem").is_dir()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_brand_migration_rejects_parent_swap_before_namespace_move(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

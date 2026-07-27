@@ -54,6 +54,15 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_KIND = "skill_authoring_revision"
 _SAVE_SCOPE = "skill_authoring_save"
 _FORK_SCOPE = "skill_authoring_fork"
+_CREATE_SCOPE = "skill_authoring_create"
+_ARCHIVE_SCOPE = "skill_authoring_archive"
+_EVENT_TYPES = {
+    "save": "skill_saved",
+    "fork": "skill_forked",
+    "create": "skill_created",
+    "archive": "skill_archived",
+}
+_ARCHIVE_DIRECTORY = "ops/deleted-skills"
 PINNED_SKILL_POLICY_UNKNOWN = "*"
 _RECOVERY_SCHEMA = "SkillAuthoringRecoveryV2"
 _RECOVERY_DIRECTORY = "skill-authoring-recovery"
@@ -653,6 +662,255 @@ class SkillAuthoringService:
             raise SkillPersistenceError("Skill fork produced no result")
         return result
 
+    def preview_create(
+        self,
+        skill_id: str,
+        *,
+        content: str,
+        expected_catalog_sha256: str,
+    ) -> dict[str, Any]:
+        """Validate content for a brand-new pack_local skill without writing."""
+
+        target_id = self._validate_skill_id(skill_id)
+        expected_catalog = self._validate_sha(expected_catalog_sha256, "catalog")
+        proposed = self._validate_content(target_id, content)
+        with self.catalog_read_guard():
+            snapshot = self.catalog.load()
+            self._require_destination_available(target_id, snapshot)
+            if snapshot.catalog_sha256 != expected_catalog:
+                raise SkillConflictError(
+                    "Catalog changed while creating a skill",
+                    details={
+                        "skill_id": target_id,
+                        "kind": "catalog_sha256",
+                        "expected_catalog_sha256": expected_catalog,
+                        "current_catalog_sha256": snapshot.catalog_sha256,
+                    },
+                )
+            return {
+                "operation": "skill_create_preview",
+                "new_skill_id": target_id,
+                "destination": self._relative_path(target_id),
+                "expected_catalog_sha256": expected_catalog,
+                "proposed_source_sha256": sha256_hex(proposed.data),
+                "validation": proposed.summary(),
+                "ownership_after_create": {"pack_id": "pack_local", "trust_class": "user"},
+            }
+
+    def create_blank(
+        self,
+        skill_id: str,
+        *,
+        content: str,
+        expected_catalog_sha256: str,
+        idempotency_key: str,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        """Create a brand-new pack_local skill from user content (no source dependency)."""
+
+        target_id = self._validate_skill_id(skill_id)
+        expected_catalog = self._validate_sha(expected_catalog_sha256, "catalog")
+        actor = self._validate_token(actor_id, "actor_id")
+        idempotency = self._validate_token(idempotency_key, "idempotency_key")
+        proposed = self._validate_content(target_id, content)
+        request = {
+            "operation": "create",
+            "new_skill_id": target_id,
+            "expected_catalog_sha256": expected_catalog,
+            "actor_id": actor,
+        }
+        intent: _RecoveryIntent | None = None
+        committed = False
+        result: dict[str, Any] | None = None
+        with self._write_lock, self._exclusive_authoring_lock():
+            self._recover_pending_journals()
+            try:
+                with initialize_platform_store(self.root) as store, store.transaction():
+                    replay = self._receipt(store, _CREATE_SCOPE, idempotency, request)
+                    if replay is not None:
+                        return replay
+                    snapshot = self.catalog.load()
+                    self._require_destination_available(target_id, snapshot)
+                    if snapshot.catalog_sha256 != expected_catalog:
+                        raise SkillConflictError(
+                            "Catalog changed while creating a skill",
+                            details={
+                                "skill_id": target_id,
+                                "kind": "catalog_sha256",
+                                "expected_catalog_sha256": expected_catalog,
+                                "current_catalog_sha256": snapshot.catalog_sha256,
+                            },
+                        )
+                    intent = self._new_recovery_intent(
+                        operation="create",
+                        source_skill_id=target_id,
+                        target_skill_id=target_id,
+                        scope=_CREATE_SCOPE,
+                        idempotency_key=idempotency,
+                        request=request,
+                        original_source_sha256=None,
+                        proposed_source_sha256=sha256_hex(proposed.data),
+                    )
+                    intent = self._create_skill_file(target_id, proposed.data, intent=intent)
+                    updated = self._load_updated(target_id, proposed.data)
+                    self._require_non_target_catalog_unchanged(
+                        snapshot,
+                        updated.snapshot,
+                        target_skill_id=target_id,
+                    )
+                    result = self._record_change(
+                        store,
+                        operation="create",
+                        source_skill_id=target_id,
+                        target=updated,
+                        previous_catalog_sha256=snapshot.catalog_sha256,
+                        previous_source_sha256=None,
+                        actor_id=actor,
+                        idempotency_key=idempotency,
+                        validation=proposed,
+                        diff=_diff(
+                            "",
+                            proposed.content,
+                            source_path="(new)",
+                            target_path=self._relative_path(target_id),
+                        ),
+                    )
+                    store.idempotent_receipt(
+                        scope=_CREATE_SCOPE,
+                        idempotency_key=idempotency,
+                        request=request,
+                        receipt=result,
+                    )
+                committed = True
+            except SkillAuthoringError:
+                raise
+            except PlatformStoreError as error:
+                if "Idempotency key" in str(error):
+                    raise SkillIdempotencyError(
+                        "Idempotency key was reused for another skill create",
+                        details={"new_skill_id": target_id},
+                    ) from error
+                raise SkillPersistenceError("Skill create store update failed") from error
+            except OSError as error:
+                raise SkillPersistenceError("Skill create write failed") from error
+            finally:
+                if intent is not None:
+                    if committed:
+                        self._finalize_recovery_intent(intent)
+                    else:
+                        self._rollback_recovery_intent(intent)
+        if result is None:  # pragma: no cover - defensive invariant
+            raise SkillPersistenceError("Skill create produced no result")
+        return result
+
+    def archive(
+        self,
+        skill_id: str,
+        *,
+        expected_catalog_sha256: str,
+        expected_source_sha256: str,
+        idempotency_key: str,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        """Soft-delete an editable pack_local skill: hardlink to ops/deleted-skills/, then unlink.
+
+        Recovery is structural (file survives under ``ops/deleted-skills/`` with a timestamped
+        name + audit record), not journal-based like save/fork/create. Sufficient because
+        archive is reversible by manual restore from the archive directory.
+        """
+
+        validated_id = self._validate_skill_id(skill_id)
+        expected_catalog = self._validate_sha(expected_catalog_sha256, "catalog")
+        expected_source = self._validate_sha(expected_source_sha256, "source")
+        actor = self._validate_token(actor_id, "actor_id")
+        idempotency = self._validate_token(idempotency_key, "idempotency_key")
+        request = {
+            "operation": "archive",
+            "skill_id": validated_id,
+            "expected_catalog_sha256": expected_catalog,
+            "expected_source_sha256": expected_source,
+            "actor_id": actor,
+        }
+        with self._write_lock, self._exclusive_authoring_lock():
+            self._recover_pending_journals()
+            with initialize_platform_store(self.root) as store, store.transaction():
+                replay = self._receipt(store, _ARCHIVE_SCOPE, idempotency, request)
+                if replay is not None:
+                    return replay
+                # No catalog_read_guard here: we already hold the exclusive authoring lock,
+                # which on Windows (msvcrt.locking) cannot be re-acquired as shared.
+                context = self._context(validated_id)
+                policy = self._policy(context, store=store)
+                self._require_editable(validated_id, policy)
+                self._require_cas(
+                    context,
+                    expected_catalog=expected_catalog,
+                    expected_source=expected_source,
+                    proposed=context.content,
+                )
+                timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                archive_dir = self.root / _ARCHIVE_DIRECTORY
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                archive_name = f"{validated_id}.{timestamp}.md"
+                archive_path = archive_dir / archive_name
+                if archive_path.exists():
+                    # Same-second retry: append short disambiguator.
+                    archive_name = f"{validated_id}.{timestamp}.{secrets.token_hex(2)}.md"
+                    archive_path = archive_dir / archive_name
+                # Hardlink first: if anything below fails, the source file is still intact.
+                hardlink_under(
+                    self.root / "skills" / validated_id,
+                    "SKILL.md",
+                    archive_dir,
+                    archive_name,
+                )
+                fsync_directory(archive_dir)
+                skills_root = self._open_skills_directory()
+                unlink_under(skills_root / validated_id, "SKILL.md")
+                fsync_directory(skills_root / validated_id)
+                rmdir_under(skills_root, validated_id)
+                fsync_directory(skills_root)
+                archived = {
+                    "operation": "archive",
+                    "skill_id": validated_id,
+                    "source_path": self._relative_path(validated_id),
+                    "archive_path": f"{_ARCHIVE_DIRECTORY}/{archive_name}",
+                    "previous_source_sha256": expected_source,
+                    "previous_catalog_sha256": expected_catalog,
+                }
+                event = store.append_event(
+                    stream_id=f"skill_authoring_{validated_id}",
+                    aggregate_id=validated_id,
+                    event_type="skill_archived",
+                    actor_id=actor,
+                    payload_schema="skill_authoring_audit_v1",
+                    payload={
+                        "archive_path": archived["archive_path"],
+                        "source_sha256": expected_source,
+                        "previous_source_sha256": expected_source,
+                        "catalog_sha256": expected_catalog,
+                        "operation": "archive",
+                        "idempotency_key_sha256": sha256_hex(idempotency.encode("utf-8")),
+                    },
+                )
+                result = {
+                    **archived,
+                    "audit_event_id": event["event_id"],
+                    "test_status": "pending",
+                    "affected_agents": self._affected_agents(context.snapshot, validated_id),
+                    "cache_invalidation": {
+                        "scope": "related_skill_queries",
+                        "skill_ids": [validated_id],
+                    },
+                }
+                store.idempotent_receipt(
+                    scope=_ARCHIVE_SCOPE,
+                    idempotency_key=idempotency,
+                    request=request,
+                    receipt=result,
+                )
+        return result
+
     def _context(self, skill_id: str) -> _SkillContext:
         validated_id = self._validate_skill_id(skill_id)
         # Read the typed target first so symlink/hardlink/oversize failures retain a typed path
@@ -1157,7 +1415,7 @@ class SkillAuthoringService:
         event = store.append_event(
             stream_id=f"skill_authoring_{skill.skill_id}",
             aggregate_id=skill.skill_id,
-            event_type="skill_saved" if operation == "save" else "skill_forked",
+            event_type=_EVENT_TYPES.get(operation, f"skill_{operation}"),
             actor_id=actor_id,
             payload_schema="skill_authoring_audit_v1",
             payload={
@@ -1741,13 +1999,14 @@ class SkillAuthoringService:
     def _validate_recovery_intent(intent: _RecoveryIntent) -> None:
         if (
             _RECOVERY_TXN.fullmatch(intent.transaction_id) is None
-            or intent.operation not in {"save", "fork"}
+            or intent.operation not in {"save", "fork", "create"}
             or _SKILL_ID.fullmatch(intent.source_skill_id) is None
             or _SKILL_ID.fullmatch(intent.target_skill_id) is None
-            or intent.scope not in {_SAVE_SCOPE, _FORK_SCOPE}
+            or intent.scope not in {_SAVE_SCOPE, _FORK_SCOPE, _CREATE_SCOPE}
             or (intent.operation == "save") != (intent.scope == _SAVE_SCOPE)
             or (intent.operation == "fork") != (intent.scope == _FORK_SCOPE)
-            or (intent.operation == "save" and intent.source_skill_id != intent.target_skill_id)
+            or (intent.operation == "create") != (intent.scope == _CREATE_SCOPE)
+            or (intent.operation in {"save", "create"} and intent.source_skill_id != intent.target_skill_id)
             or not isinstance(intent.idempotency_key, str)
             or not intent.idempotency_key
             or len(intent.idempotency_key) > 256

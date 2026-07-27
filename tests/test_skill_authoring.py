@@ -542,6 +542,7 @@ def test_preview_rejects_oversize_invalid_utf8_and_bad_skill_id(
         service.edit_policy("a/b")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_source_symlink_and_hardlink_are_rejected(
     workspace: Path,
     service: SkillAuthoringService,
@@ -1548,3 +1549,122 @@ def test_public_errors_and_successes_are_json_ready_and_redacted(
         service.edit_policy("../absolute-or-traversal")
     rendered = json.dumps(captured.value.to_dict())
     assert str(workspace) not in rendered
+
+
+def test_create_blank_creates_editable_local_skill(
+    workspace: Path,
+    service: SkillAuthoringService,
+) -> None:
+    catalog_sha = CatalogService(workspace).load().catalog_sha256
+    content = _skill_content("brand-new-skill", description="Created from scratch.")
+
+    created = service.create_blank(
+        "brand-new-skill",
+        content=content,
+        expected_catalog_sha256=catalog_sha,
+        idempotency_key="create-brand-new-1",
+        actor_id="user_local_test",
+    )
+    replay = service.create_blank(
+        "brand-new-skill",
+        content=content,
+        expected_catalog_sha256=catalog_sha,
+        idempotency_key="create-brand-new-1",
+        actor_id="user_local_test",
+    )
+
+    assert created == replay
+    target = workspace / "skills" / "brand-new-skill" / "SKILL.md"
+    assert target.is_file() and not target.is_symlink()
+    assert created["source_sha256"] == sha256_hex(target.read_bytes())
+    assert created["operation"] == "create"
+    snapshot = CatalogService(workspace).load()
+    fresh = snapshot.skill("brand-new-skill")
+    assert fresh is not None
+    assert fresh.pack_id == "pack_local"
+    assert fresh.trust_class.value == "user"
+    assert service.edit_policy("brand-new-skill")["editable"] is True
+    store = open_platform_store_read_only(workspace)
+    assert store is not None
+    with store:
+        events = store.list_events("skill_authoring_brand-new-skill")
+        assert len(events) == 1 and events[0]["event_type"] == "skill_created"
+
+
+def test_create_rejects_existing_destination(
+    workspace: Path,
+    service: SkillAuthoringService,
+) -> None:
+    catalog_sha = CatalogService(workspace).load().catalog_sha256
+    content = _skill_content("local-skill", description="Dup.")
+
+    with pytest.raises(SkillConflictError) as captured:
+        service.preview_create(
+            "local-skill",
+            content=content,
+            expected_catalog_sha256=catalog_sha,
+        )
+    assert captured.value.details["kind"] == "destination_exists"
+
+
+def test_archive_soft_deletes_to_ops_directory(
+    workspace: Path,
+    service: SkillAuthoringService,
+) -> None:
+    # Create a blank skill first so archive is isolated from the catalog's agent ↔ skill
+    # referential integrity (workspace fixtures wire agent_builder to local-skill).
+    catalog_sha = CatalogService(workspace).load().catalog_sha256
+    content = _skill_content("disposable-skill", description="To be archived.")
+    create = service.create_blank(
+        "disposable-skill",
+        content=content,
+        expected_catalog_sha256=catalog_sha,
+        idempotency_key="create-disposable-1",
+        actor_id="user_local_test",
+    )
+
+    archived = service.archive(
+        "disposable-skill",
+        expected_catalog_sha256=create["catalog_sha256"],
+        expected_source_sha256=create["source_sha256"],
+        idempotency_key="archive-disposable-1",
+        actor_id="user_local_test",
+    )
+    replay = service.archive(
+        "disposable-skill",
+        expected_catalog_sha256=create["catalog_sha256"],
+        expected_source_sha256=create["source_sha256"],
+        idempotency_key="archive-disposable-1",
+        actor_id="user_local_test",
+    )
+
+    assert archived == replay
+    assert not (workspace / "skills" / "disposable-skill").exists()
+    archive_entries = list((workspace / "ops" / "deleted-skills").glob("disposable-skill.*.md"))
+    assert len(archive_entries) == 1
+    # ponytail: compare via sha256 — content is the validated/normalized bytes from create,
+    # not necessarily byte-equal to the raw YAML the test fed in (YAML may strip quotes).
+    assert sha256_hex(archive_entries[0].read_bytes()) == create["source_sha256"]
+    snapshot = CatalogService(workspace).load()
+    assert snapshot.skill("disposable-skill") is None
+    store = open_platform_store_read_only(workspace)
+    assert store is not None
+    with store:
+        events = store.list_events("skill_authoring_disposable-skill")
+        assert any(event["event_type"] == "skill_archived" for event in events)
+
+
+def test_archive_rejects_official_pack_skill(
+    workspace: Path,
+    service: SkillAuthoringService,
+) -> None:
+    catalog_sha, source_sha = _snapshot_pair(workspace, "official-skill")
+    with pytest.raises(SkillReadOnlyError):
+        service.archive(
+            "official-skill",
+            expected_catalog_sha256=catalog_sha,
+            expected_source_sha256=source_sha,
+            idempotency_key="archive-official-1",
+            actor_id="user_local_test",
+        )
+    assert (workspace / "skills" / "official-skill" / "SKILL.md").exists()

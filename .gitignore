@@ -96,6 +96,12 @@ WORKLOG.md
 TODO.local.md
 SCRATCH.md
 TROUBLESHOOTING.md
+TODO.md
+AGENTS.md
+USER_INSTRUCTIONS.md
+ROADMAP.md
+WORK.md
+ponytail-tuning.md
 
 # opencode agent local runtime state (history, cache, session logs).
 # .opencode/skills/ is the deliverable and stays tracked.
@@ -106,6 +112,11 @@ TROUBLESHOOTING.md
 .opencode/session/
 .opencode/*.log
 .opencode/.session*
+
+
+# Root conftest.py is a local Windows override (forces pytest basetemp to
+# D:\TEMP); never ship it in the public tree.
+/conftest.py
 
 # Git merge / rebase conflict artifacts (transient, never tracked).
 *.orig

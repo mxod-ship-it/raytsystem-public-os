@@ -30,9 +30,9 @@ raytsystem is pre-1.0. This roadmap describes direction, not a delivery promise.
 - Code graph rebuild работает (env fix + POSIX path normalization)
 - Launchers `.bat`/`.ps1`, WINDOWS.md, USER_INSTRUCTIONS.md
 - win32 skips для POSIX-only тестов
+- **2026-07-27:** skip 18 symlink-rejection тестов на win32; полный прогон `pytest -q` → 696 passed / 52 skipped / 0 failed (после lift лимитов маршрутизаторов)
 
 Что осталось (подробности в `TODO.md`):
-- 4 symlink-теста добить skipif win32
 - Skill CRUD (create + delete)
 - Архитектурный рефакторинг (дедупликация SQLite/CRLF паттернов)
 - Агенты: enable/disable toggle, run из UI

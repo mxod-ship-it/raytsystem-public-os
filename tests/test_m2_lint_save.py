@@ -255,6 +255,7 @@ def test_repeated_save_rejects_linked_preview_without_touching_the_referent(
     assert outside.read_bytes() == sentinel
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 def test_save_rejects_symlinked_output_parent_without_external_write(
     project_root: Path,
 ) -> None:

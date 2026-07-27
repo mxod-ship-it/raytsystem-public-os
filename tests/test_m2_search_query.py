@@ -210,6 +210,7 @@ def test_index_rebuild_crash_never_replaces_the_last_good_index(
     assert not list(baseline.path.parent.glob(f".{baseline.path.name}.*.tmp"))
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
 def test_index_rebuild_rejects_unsafe_link_targets_without_touching_their_referent(
     project_root: Path,
@@ -232,6 +233,7 @@ def test_index_rebuild_rejects_unsafe_link_targets_without_touching_their_refere
     assert outside.read_bytes() == sentinel
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink/hardlink: POSIX-only")
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
 def test_projection_rejects_unsafe_graph_target_without_touching_its_referent(
     project_root: Path,
