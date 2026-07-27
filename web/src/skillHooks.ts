@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getJson, postJson } from "./api";
 import type {
+  SkillArchiveResult,
+  SkillCreatePreview,
   SkillDetailSnapshot,
   SkillForkPreview,
   SkillsSnapshot,
@@ -116,6 +118,80 @@ export const useSkillFork = () => {
     onSuccess: async () => {
       await Promise.all([
         client.invalidateQueries({ queryKey: ["skills"] }),
+        client.invalidateQueries({ queryKey: ["catalog"] }),
+        client.invalidateQueries({ queryKey: ["agents"] })
+      ]);
+    }
+  });
+};
+
+interface SkillCreateInput {
+  newSkillId: string;
+  content: string;
+  expectedCatalogSha256: string;
+  idempotencyKey: string;
+}
+
+interface SkillArchiveInput {
+  skillId: string;
+  expectedCatalogSha256: string;
+  expectedSourceSha256: string;
+  idempotencyKey: string;
+}
+
+export const useSkillCreatePreview = () =>
+  useMutation({
+    mutationFn: (input: SkillCreateInput) =>
+      postJson<SkillCreatePreview>(
+        `/api/v1/skills/preview/create`,
+        {
+          new_skill_id: input.newSkillId,
+          content: input.content,
+          expected_catalog_sha256: input.expectedCatalogSha256
+        },
+        input.idempotencyKey
+      )
+  });
+
+export const useSkillCreate = () => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SkillCreateInput) =>
+      postJson<SkillWriteResult>(
+        `/api/v1/skills`,
+        {
+          new_skill_id: input.newSkillId,
+          content: input.content,
+          expected_catalog_sha256: input.expectedCatalogSha256
+        },
+        input.idempotencyKey
+      ),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["skills"] }),
+        client.invalidateQueries({ queryKey: ["catalog"] }),
+        client.invalidateQueries({ queryKey: ["agents"] })
+      ]);
+    }
+  });
+};
+
+export const useSkillArchive = () => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SkillArchiveInput) =>
+      postJson<SkillArchiveResult>(
+        `/api/v1/skills/${encodeURIComponent(input.skillId)}/archive`,
+        {
+          expected_catalog_sha256: input.expectedCatalogSha256,
+          expected_source_sha256: input.expectedSourceSha256
+        },
+        input.idempotencyKey
+      ),
+    onSuccess: async (_result, input) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["skills"] }),
+        client.invalidateQueries({ queryKey: ["skill", input.skillId] }),
         client.invalidateQueries({ queryKey: ["catalog"] }),
         client.invalidateQueries({ queryKey: ["agents"] })
       ]);

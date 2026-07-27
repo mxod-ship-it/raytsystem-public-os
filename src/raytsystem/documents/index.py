@@ -9,9 +9,9 @@ import os
 import re
 import sqlite3
 import stat
-import tempfile
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -39,7 +39,13 @@ from raytsystem.documents.subprocesses import (
     run_bounded,
 )
 from raytsystem.io import UnsafeWritePath, ensure_safe_directory
-from raytsystem.platform_runtime import atomic_replace, descend_directory
+from raytsystem.platform_runtime import (
+    ScopedConnection as _ScopedConnection,
+)
+from raytsystem.platform_runtime import (
+    descend_directory,
+    rebuild_sqlite_atomic,
+)
 from raytsystem.platform_store import (
     PlatformStoreError,
     initialize_platform_store,
@@ -47,7 +53,6 @@ from raytsystem.platform_store import (
 )
 from raytsystem.security.paths import PathPolicyError, read_regular_file
 from raytsystem.security.sensitivity import SecretScanner
-from raytsystem.storage import fsync_directory
 
 _SCHEMA_VERSION = "3"
 _MARKDOWN_SUFFIXES = frozenset({".md", ".markdown", ".mdx"})
@@ -93,27 +98,6 @@ class _ScannedDocument:
     relative_path: str
     first_seen_at: str
     size_bytes: int
-
-
-class _ScopedConnection:
-    """sqlite3 read connection that releases its OS handle promptly on exit.
-
-    On Windows, ``sqlite3.Connection.close()`` keeps the underlying file
-    handle alive until garbage collection, which blocks ``os.replace``/unlink
-    of the same database file. ``__exit__`` forces a collection so callers
-    (rebuild, tests) can immediately replace the file.
-    """
-
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self._connection = connection
-
-    def __enter__(self) -> sqlite3.Connection:
-        return self._connection
-
-    def __exit__(self, *_exc: object) -> None:
-        self._connection.close()
-        # ponytail: release the Windows file handle before GC would.
-        gc.collect()
 
 
 def _now() -> str:
@@ -314,22 +298,9 @@ class DocumentIndex:
             raise DocumentIndexError("Document index path is unsafe") from error
         previous_projection = self._previous_projection()
         identities = self._identity_map()
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
-        )
-        os.close(descriptor)
-        temporary = Path(temporary_name)
-        os.chmod(temporary, 0o600)
-        connection: sqlite3.Connection | None = None
-        try:
-            connection = sqlite3.connect(temporary)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA journal_mode=DELETE")
-            connection.execute("PRAGMA synchronous=FULL")
-            connection.execute("PRAGMA foreign_keys=ON")
+
+        def _build(connection: sqlite3.Connection) -> None:
             connection.execute("PRAGMA trusted_schema=OFF")
-            connection.execute("PRAGMA temp_store=MEMORY")
-            active_connection = connection
             self._create_schema(connection)
             self._insert_roots(connection)
             total_links = 0
@@ -339,7 +310,7 @@ class DocumentIndex:
                 total_links += len(item.links)
                 if total_links > _MAX_TOTAL_LINKS:
                     raise DocumentIndexError("Document roots exceed the global link limit")
-                self._insert_document(active_connection, item)
+                self._insert_document(connection, item)
 
             documents, error_count = self._scan_stream(
                 previous_projection,
@@ -368,25 +339,19 @@ class DocumentIndex:
             integrity = connection.execute("PRAGMA integrity_check").fetchone()
             if integrity is None or str(integrity[0]) != "ok":
                 raise DocumentIndexError("Document index integrity check failed")
-            connection.close()
-            connection = None
-            # ponytail: sqlite3 may keep the file handle alive until GC on
-            # Windows; force collection so os.replace is not blocked.
-            gc.collect()
-            with temporary.open("r+b") as handle:
-                # ponytail: "r+b" so os.fsync has write access on Windows.
-                os.fsync(handle.fileno())
-            assert_safe_sqlite_family(self.path)
-            atomic_replace(temporary, self.path)
-            fsync_directory(self.path.parent)
+
+        try:
+            rebuild_sqlite_atomic(self.path, _build)
         except (OSError, sqlite3.Error, UnsafeWritePath) as error:
             raise DocumentIndexError("Document index rebuild failed") from error
         finally:
-            if connection is not None:
-                connection.close()
-            temporary.unlink(missing_ok=True)
+            # ponytail: sqlite sidecar files (-journal/-wal/-shm) may linger
+            # on Windows; sweep them so a failed rebuild leaves no fragments.
             for suffix in ("-journal", "-wal", "-shm"):
-                Path(f"{temporary}{suffix}").unlink(missing_ok=True)
+                sidecar = Path(f"{self.path}{suffix}")
+                if sidecar.exists():
+                    with suppress(OSError):
+                        sidecar.unlink(missing_ok=True)
         # ponytail: status() opens a read connection; release it before returning
         # so Windows callers can immediately operate on self.path.
         result = self.status()

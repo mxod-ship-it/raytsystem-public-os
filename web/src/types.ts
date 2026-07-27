@@ -267,8 +267,18 @@ export interface SkillForkPreview {
   ownership_after_create: { pack_id: string; trust_class: string };
 }
 
+export interface SkillCreatePreview {
+  operation: "skill_create_preview";
+  new_skill_id: string;
+  destination: string;
+  expected_catalog_sha256: string;
+  proposed_source_sha256: string;
+  validation: SkillValidationResult;
+  ownership_after_create: { pack_id: string; trust_class: string };
+}
+
 export interface SkillWriteResult {
-  operation: "save" | "fork";
+  operation: "save" | "fork" | "create" | "archive";
   skill_id: string;
   source_skill_id: string;
   source_path: string;
@@ -279,6 +289,19 @@ export interface SkillWriteResult {
   audit_event_id: string;
   test_status: "pending";
   validation: SkillValidationResult;
+  affected_agents: RelatedAgentRef[];
+  cache_invalidation: { scope: string; skill_ids: string[] };
+}
+
+export interface SkillArchiveResult {
+  operation: "archive";
+  skill_id: string;
+  source_path: string;
+  archive_path: string;
+  previous_source_sha256: string;
+  previous_catalog_sha256: string;
+  audit_event_id: string;
+  test_status: "pending";
   affected_agents: RelatedAgentRef[];
   cache_invalidation: { scope: string; skill_ids: string[] };
 }

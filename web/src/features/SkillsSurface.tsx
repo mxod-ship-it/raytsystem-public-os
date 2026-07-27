@@ -1,10 +1,11 @@
-import { Copy, FileText, Pencil, Search, ShieldCheck, Users, Wrench } from "lucide-react";
+import { CheckCircle2, Copy, FileText, Pencil, Plus, Search, ShieldCheck, Users, Wrench } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { shortId } from "../api";
 import { EmptyState, ErrorState, LoadingState, StatusPill } from "../components/StatePanel";
 import { catalogDescription, localizedCatalogLabel, roleLabel, statusLabel } from "../presentation";
 import { useSkills } from "../skillHooks";
 import type { SkillWriteResult } from "../types";
+import { SkillCreatePanel } from "./SkillCreatePanel";
 import { SkillDetailView } from "./SkillDetailView";
 
 function skillFromLocation(): string | null {
@@ -16,6 +17,8 @@ export function SkillsSurface() {
   const [query, setQuery] = useState("");
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(skillFromLocation);
   const [expectedOverride, setExpectedOverride] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [archiveNotice, setArchiveNotice] = useState<string | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -39,6 +42,7 @@ export function SkillsSurface() {
     if (!replace && document.activeElement instanceof HTMLElement) {
       returnFocusRef.current = document.activeElement;
     }
+    setArchiveNotice(null);
     const next = `/skills?skill=${encodeURIComponent(skillId)}`;
     if (replace) window.history.replaceState({}, "", next);
     else window.history.pushState({}, "", next);
@@ -58,6 +62,19 @@ export function SkillsSurface() {
   const onForkCreated = (result: SkillWriteResult) => {
     setExpectedOverride(result.catalog_sha256);
     openSkill(result.skill_id, true);
+  };
+
+  const onSkillCreated = (result: SkillWriteResult) => {
+    setCreating(false);
+    setExpectedOverride(result.catalog_sha256);
+    openSkill(result.skill_id, true);
+  };
+
+  const onArchived = (archivePath: string) => {
+    setExpectedOverride(null);
+    setSelectedSkillId(null);
+    window.history.pushState({}, "", "/skills");
+    setArchiveNotice(`Skill архивирован в ${archivePath}. Восстановим вручную из ops/deleted-skills/.`);
   };
 
   const filtered = useMemo(() => {
@@ -93,13 +110,35 @@ export function SkillsSurface() {
           onBack={closeSkill}
           onRevisionChanged={onRevisionChanged}
           onForkCreated={onForkCreated}
+          onArchived={onArchived}
         />
       ) : (
         <>
           <div className="route-tools skill-list-tools">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setCreating(true)}
+              disabled={!skillsQuery.data}
+              aria-label="Создать новый skill"
+            >
+              <Plus size={16} />Новый skill
+            </button>
             <label className="search-field"><Search size={16} /><input aria-label="Поиск skills" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Имя, ID, описание, pack, permission или агент" /></label>
             <span className="inert-badge"><ShieldCheck size={14} /> Markdown остаётся inert data</span>
           </div>
+
+          {archiveNotice ? (
+            <div className="skill-save-notice" role="status"><CheckCircle2 size={16} />{archiveNotice}</div>
+          ) : null}
+
+          {creating && skillsQuery.data ? (
+            <SkillCreatePanel
+              expectedCatalogSha256={skillsQuery.data.catalog_sha256}
+              onCancel={() => setCreating(false)}
+              onCreated={onSkillCreated}
+            />
+          ) : null}
 
           {skillsQuery.isLoading ? <LoadingState label="Проверяем каталог и policy skills…" /> : null}
           {skillsQuery.isError ? <ErrorState error={skillsQuery.error} onRetry={() => void skillsQuery.refetch()} /> : null}

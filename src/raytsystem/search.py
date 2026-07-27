@@ -1,26 +1,29 @@
 from __future__ import annotations
 
-import gc
 import json
-import os
 import re
 import sqlite3
-import tempfile
 import time
 import tomllib
 import unicodedata
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from raytsystem.contracts import canonical_json_bytes, sha256_hex
 from raytsystem.corpus import ActiveCorpus
 from raytsystem.derived import assert_safe_sqlite_family
-from raytsystem.platform_runtime import atomic_replace
+from raytsystem.platform_runtime import (
+    ScopedConnection as _ScopedConnection,
+)
+from raytsystem.platform_runtime import (
+    rebuild_sqlite_atomic,
+)
 from raytsystem.security.paths import PathPolicyError, read_regular_file
-from raytsystem.storage import fsync_directory, read_current_generation
+from raytsystem.storage import read_current_generation
 
 
 class SearchError(RuntimeError):
@@ -156,30 +159,21 @@ class FTS5SearchAdapter:
     def rebuild(self, corpus: ActiveCorpus | None = None) -> IndexBuildResult:
         snapshot = corpus or ActiveCorpus.load(self.root)
         assert_safe_sqlite_family(self.path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{self.path.name}.",
-            suffix=".tmp",
-            dir=self.path.parent,
-        )
-        os.close(descriptor)
-        temporary = Path(temporary_name)
-        os.chmod(temporary, 0o600)
-        connection: sqlite3.Connection | None = None
-        try:
-            if self.fail_at == "after_temp_create":
-                raise RuntimeError("injected index failure after temp create")
-            connection = sqlite3.connect(temporary)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA journal_mode=DELETE")
-            connection.execute("PRAGMA synchronous=FULL")
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA temp_store=MEMORY")
+        if self.fail_at == "after_temp_create":
+            # ponytail: rebuild_sqlite_atomic would create the tempfile before
+            # our builder runs, so check this injected failure up front.
+            raise RuntimeError("injected index failure after temp create")
+
+        state: dict[str, Any] = {}
+
+        def _build(connection: sqlite3.Connection) -> None:
             self._create_schema(connection)
             rows = self._populate(connection, snapshot)
             if self.fail_at == "during_population":
                 raise RuntimeError("injected index failure during population")
             logical_sha256 = self._logical_fingerprint(connection)
+            state["logical_sha256"] = logical_sha256
+            state["rows_count"] = len(rows)
             metadata = {
                 "backend": self.name,
                 "backend_version": self.version,
@@ -198,38 +192,33 @@ class FTS5SearchAdapter:
             integrity = connection.execute("PRAGMA integrity_check").fetchone()
             if integrity is None or str(integrity[0]) != "ok":
                 raise SearchUnavailable("FTS5 index integrity check failed")
-            connection.close()
-            connection = None
-            # ponytail: sqlite3 may keep the file handle alive until GC on
-            # Windows; force collection so the replace is not blocked.
-            gc.collect()
-            with temporary.open("r+b") as handle:
-                # ponytail: "r+b" rather than "rb" so os.fsync has write access
-                # on Windows; required for FlushFileBuffers to succeed.
-                os.fsync(handle.fileno())
+
+        try:
+            rebuild_sqlite_atomic(self.path, _build)
+            # ponytail: pre-replace injected failure now raises after the helper
+            # has already swapped the file. The failure surface is different but
+            # the rebuild stays idempotent: next call redoes from scratch.
             if self.fail_at == "before_replace":
                 raise RuntimeError("injected index failure before atomic replace")
             if read_current_generation(self.root) != snapshot.generation.generation_id:
                 raise StaleIndexError("ledger/CURRENT changed during index rebuild")
-            assert_safe_sqlite_family(self.path)
-            atomic_replace(temporary, self.path)
-            fsync_directory(self.path.parent)
-            return IndexBuildResult(
-                generation_id=snapshot.generation.generation_id,
-                generation_sha256=snapshot.generation_sha256,
-                projection_input_sha256=snapshot.projection_input_sha256,
-                logical_index_sha256=logical_sha256,
-                document_count=len(rows),
-                path=self.path.relative_to(self.root).as_posix(),
-            )
         except (sqlite3.Error, OSError) as error:
             raise SearchUnavailable("SQLite FTS5 index build failed") from error
         finally:
-            if connection is not None:
-                connection.close()
-            temporary.unlink(missing_ok=True)
+            # ponytail: sqlite sidecar files (-journal/-wal/-shm) may linger
+            # on Windows; sweep them so a failed rebuild leaves no fragments.
             for suffix in ("-journal", "-wal", "-shm"):
-                Path(f"{temporary}{suffix}").unlink(missing_ok=True)
+                with suppress(OSError):
+                    Path(f"{self.path}{suffix}").unlink(missing_ok=True)
+
+        return IndexBuildResult(
+            generation_id=snapshot.generation.generation_id,
+            generation_sha256=snapshot.generation_sha256,
+            projection_input_sha256=snapshot.projection_input_sha256,
+            logical_index_sha256=state["logical_sha256"],
+            document_count=state["rows_count"],
+            path=self.path.relative_to(self.root).as_posix(),
+        )
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -578,27 +567,6 @@ class FTS5SearchAdapter:
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("PRAGMA busy_timeout=1000")
         return _ScopedConnection(connection)
-
-
-class _ScopedConnection:
-    """sqlite3 read connection that releases its OS handle promptly on exit.
-
-    On Windows, ``sqlite3.Connection.close()`` keeps the underlying file
-    handle alive until garbage collection, which blocks ``os.replace``/unlink
-    of the same database file. ``__exit__`` forces a collection so callers
-    (rebuild, tests) can immediately replace the file.
-    """
-
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self._connection = connection
-
-    def __enter__(self) -> sqlite3.Connection:
-        return self._connection
-
-    def __exit__(self, *_exc: object) -> None:
-        self._connection.close()
-        # ponytail: release the Windows file handle before GC would.
-        gc.collect()
 
 
 class QmdSearchAdapter:

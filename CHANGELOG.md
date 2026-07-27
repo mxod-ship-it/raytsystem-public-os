@@ -127,3 +127,41 @@ and separate maintainer approval.
 ### Верификация
 
 `uv run pytest tests/test_m3_routing.py -v` → **4 passed in 0.96s**. AGENTS.md = 62 строки (лимит 130), WORK.md = 17 строк (лимит 50).
+
+## [windows-port.7] - 2026-07-27
+
+### Added — Skill CRUD (full stack)
+
+- **Backend: `create_blank` + `archive`** в `SkillAuthoringService`. Создание с нуля (без source skill) через `POST /api/v1/skills` + `POST /api/v1/skills/preview/create`. Soft delete через `POST /api/v1/skills/{skill_id}/archive` — файл переносится в `ops/deleted-skills/{id}.{timestamp}.md` (hardlink + unlink + rmdir), остаётся audit event `skill_archived`. Восстановимо вручную.
+- **DTOs:** `SkillCreateRequest`, `SkillCreatePreviewRequest`, `SkillArchiveRequest` (`webapp/dto.py`). `SkillCreatePreviewRequest.content` — в теле, не query (правильно для длинного Markdown).
+- **Webapp routes:** `POST /api/v1/skills/preview/create`, `POST /api/v1/skills`, `POST /api/v1/skills/{skill_id}/archive` (`webapp/app.py`).
+- **Validator:** расширение `_validate_recovery_intent` для операции `create` + `_CREATE_SCOPE`.
+- **Tests:** +4 unit-теста (`tests/test_skill_authoring.py`): create happy path + idempotency replay, create conflict on existing destination, archive soft delete + audit, archive rejects official pack skill. Итог: 43 passed / 1 skipped.
+- **Frontend:** `web/src/features/SkillCreatePanel.tsx` (новый, ~165 строк) — модал с шаблоном (auto-substitution `<SKILL_ID>` через useMemo), preview mutation, submit. Кнопка `+ Новый skill` в toolbar `SkillsSurface.tsx`. Кнопка `Архивировать` (danger, только editable) в `SkillDetailView.tsx` + confirm Dialog. Notice после archive сверху списка.
+- **Types:** `SkillCreatePreview`, `SkillArchiveResult`, расширение `SkillWriteResult.operation` до `"save" | "fork" | "create" | "archive"`.
+
+### Changed — архитектурный рефакторинг (5 хелперов)
+
+5 дублирующихся паттернов вынесены в `src/raytsystem/platform_runtime.py`:
+
+1. **`normalize_crlf_bytes`** + **`normalize_crlf_text`** — CRLF-нормализация для bytes (catalog/skill) и text (extractors). Заменено 5 мест: `catalog.py:396,405`, `extractors.py:62,529`, `skill_authoring.py:1222`.
+2. **`ScopedConnection`** (публичное имя, без underscore) — sqlite context manager с GC-release для Windows. Удалены дубликаты из `documents/index.py:98-116` и `search.py:583-601`. Импортируется как `ScopedConnection as _ScopedConnection` чтобы не менять caller'ы.
+3. **`build_sandbox_env(overrides=None)`** — `os.environ.copy()` + overrides для sandboxed subprocess workers. Заменено 2 места: `codegraph/extract.py:1253`, `extractors.py:486`.
+4. **`rebuild_sqlite_atomic(path, builder, *, prepare_parent=True)`** — tempfile → connect → PRAGMAs → builder(connection) → close + GC + fsync + atomic_replace + fsync_directory, с finally cleanup tempfile. Заменены rebuild-методы в `documents/index.py` и `search.py` (builder callback инкапсулирует schema + populate + metadata + integrity_check).
+5. **`atomic_replace` retry count 20 → 8.** Worst-case time: ~1.8s вместо ~21s. Достаточно для AV scan clearing на Windows.
+
+### Семантичесие изменения
+
+- `search.py` rebuild: инжектируемая failure `fail_at == "before_replace"` теперь поднимается ПОСЛЕ `atomic_replace` (helper не даёт точки входа между fsync и replace). Failure surface другой, но rebuild остаётся idempotent — повторный вызов делает всё с нуля. ponytail-комментарии оставлены в коде.
+- `search.py` rebuild: `fail_at == "after_temp_create"` проверяется до вызова helper'а (в helper'е tempfile создаётся первым, до builder callback).
+
+### Верификация
+
+- `uv run ruff check .` → All checks passed.
+- `uv run mypy src/raytsystem/platform_runtime.py` → 2 pre-existing errors (ctypes.windll/GetLastError в `_move_file_replace`, не связаны с рефакторингом).
+- Полный прогон `RAYTSYSTEM_PLATFORM_DISABLE_FSYNC=1 uv run pytest -q` → **701 passed / 52 skipped / 0 failed** (21 мин). Прирост +5 к baseline 696: 4 новых теста Skill CRUD + 1 дополнительный.
+- Web: `npm run typecheck`, `npm run lint --max-warnings 0`, `npm run test:unit` (160/160), `npm run build` — все зелёные.
+
+### Известные риски
+
+- `search.py::fail_at == "before_replace"` — если такие тесты есть и проверяют, что atomic_replace НЕ произошёл, они могут сломаться. В текущем наборе не обнаружено (полный прогон зелёный).

@@ -26,10 +26,11 @@ from __future__ import annotations
 import errno
 import gc
 import os
+import sqlite3
 import stat as stat_module
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from pathlib import Path
 
@@ -40,7 +41,10 @@ __all__ = [
     "O_CLOEXEC",
     "O_DIRECTORY",
     "O_NOFOLLOW",
+    "ScopedConnection",
+    "atomic_replace",
     "binary_readonly_flags",
+    "build_sandbox_env",
     "chmod_private",
     "descend_directory",
     "fchmod",
@@ -50,8 +54,11 @@ __all__ = [
     "kill_process_tree",
     "lstat_under",
     "mkdir_under",
+    "normalize_crlf_bytes",
+    "normalize_crlf_text",
     "open_file_readonly",
     "open_under",
+    "rebuild_sqlite_atomic",
     "rename_under",
     "replace_under",
     "rmdir_under",
@@ -372,7 +379,7 @@ def replace_under(
         os.close(src_fd)
 
 
-def atomic_replace(src: Path, dst: Path, *, attempts: int = 20) -> None:
+def atomic_replace(src: Path, dst: Path, *, attempts: int = 8) -> None:
     """``os.replace(src, dst)`` with Windows-friendly retry for transient locks.
 
     On Windows, real-time antivirus and lingering readers raise
@@ -433,6 +440,103 @@ def _move_file_replace(src: str, dst: str) -> bool:
     # Retry once more after a brief pause in case the reader is releasing.
     time.sleep(0.1)
     return bool(move_file_ex(src, dst, MOVEFILE_REPLACE_EXISTING))
+
+
+def normalize_crlf_bytes(data: bytes) -> bytes:
+    """Replace b\"\\r\\n\" with b\"\\n\". Use for catalog/skill byte-exact content."""
+    return data.replace(b"\r\n", b"\n")
+
+
+def normalize_crlf_text(text: str) -> str:
+    """Normalize \\r\\n and lone \\r to \\n. Use for extracted text sources."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def build_sandbox_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """Copy of os.environ with optional overrides for sandboxed subprocess workers."""
+    environment = os.environ.copy()
+    if overrides:
+        environment.update(overrides)
+    return environment
+
+
+class ScopedConnection:
+    """sqlite3 read connection that releases its OS handle promptly on exit.
+
+    On Windows, ``sqlite3.Connection.close()`` keeps the underlying file
+    handle alive until garbage collection, which blocks ``os.replace``/unlink
+    of the same database file. ``__exit__`` forces a collection so callers
+    (rebuild, tests) can immediately replace the file.
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self._connection
+
+    def __exit__(self, *_exc: object) -> None:
+        self._connection.close()
+        # ponytail: release the Windows file handle before GC would.
+        gc.collect()
+
+
+def rebuild_sqlite_atomic(
+    path: Path,
+    builder: Callable[[sqlite3.Connection], None],
+    *,
+    prepare_parent: bool = True,
+) -> None:
+    """Atomically (re)build a SQLite database at ``path``.
+
+    Creates a sibling tempfile, hands a fresh connection to ``builder`` (which
+    must run schema + populate + commit + integrity_check), then fsync +
+    atomic replace + fsync directory. The tempfile is removed on any failure.
+
+    Default PRAGMAs applied before builder: journal_mode=DELETE, synchronous=FULL,
+    foreign_keys=ON, temp_store=MEMORY. Callers can re-execute PRAGMAs inside
+    builder if needed.
+    """
+
+    import tempfile
+
+    if prepare_parent:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    os.chmod(temporary, 0o600)
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(temporary)
+        connection.row_factory = sqlite3.Row
+        for pragma in (
+            "PRAGMA journal_mode=DELETE",
+            "PRAGMA synchronous=FULL",
+            "PRAGMA foreign_keys=ON",
+            "PRAGMA temp_store=MEMORY",
+        ):
+            connection.execute(pragma)
+        builder(connection)
+        connection.close()
+        connection = None
+        # ponytail: sqlite3 may keep the file handle alive until GC on
+        # Windows; force collection so os.replace is not blocked.
+        gc.collect()
+        with temporary.open("r+b") as handle:
+            # ponytail: "r+b" so os.fsync has write access on Windows.
+            os.fsync(handle.fileno())
+        atomic_replace(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        if connection is not None:
+            with suppress(sqlite3.Error):
+                connection.close()
+            gc.collect()
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)
 
 
 def rename_under(

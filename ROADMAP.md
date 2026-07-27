@@ -31,11 +31,12 @@ raytsystem is pre-1.0. This roadmap describes direction, not a delivery promise.
 - Launchers `.bat`/`.ps1`, WINDOWS.md, USER_INSTRUCTIONS.md
 - win32 skips для POSIX-only тестов
 - **2026-07-27:** skip 18 symlink-rejection тестов на win32; полный прогон `pytest -q` → 696 passed / 52 skipped / 0 failed (после lift лимитов маршрутизаторов)
+- **2026-07-27 (session 2):** Skill CRUD full-stack (create_blank + archive + UI); архитектурный рефакторинг — 5 хелперов в `platform_runtime` (`normalize_crlf_bytes/text`, `ScopedConnection`, `build_sandbox_env`, `rebuild_sqlite_atomic`, retry 20→8 в `atomic_replace`). Полный прогон: **701 passed / 52 skipped / 0 failed**.
 
 Что осталось (подробности в `TODO.md`):
-- Skill CRUD (create + delete)
-- Архитектурный рефакторинг (дедупликация SQLite/CRLF паттернов)
 - Агенты: enable/disable toggle, run из UI
+- OpenCode интеграция (adapter, MCP tools, skills sync)
+- God classes refactoring (IngestPipeline / SkillAuthoringService / execution_views)
 
 Requests belong in GitHub issues. Planned work can change after security
 review or user validation.

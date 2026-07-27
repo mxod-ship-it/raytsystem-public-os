@@ -32,6 +32,7 @@ from raytsystem.platform_runtime import (
     hardlink_under,
     lstat_under,
     mkdir_under,
+    normalize_crlf_bytes,
     open_under,
     rename_under,
     replace_under,
@@ -1219,7 +1220,7 @@ class SkillAuthoringService:
                 "test_status": "pending",
             }
         )
-        boundary = context.data.replace(b"\r\n", b"\n").find(b"\n---\n", 4)
+        boundary = normalize_crlf_bytes(context.data).find(b"\n---\n", 4)
         if boundary < 0:  # pragma: no cover - parser above enforces this
             raise SkillValidationError(
                 [{"field": "frontmatter", "code": "invalid_source_frontmatter"}]
@@ -2006,7 +2007,10 @@ class SkillAuthoringService:
             or (intent.operation == "save") != (intent.scope == _SAVE_SCOPE)
             or (intent.operation == "fork") != (intent.scope == _FORK_SCOPE)
             or (intent.operation == "create") != (intent.scope == _CREATE_SCOPE)
-            or (intent.operation in {"save", "create"} and intent.source_skill_id != intent.target_skill_id)
+            or (
+                intent.operation in {"save", "create"}
+                and intent.source_skill_id != intent.target_skill_id
+            )
             or not isinstance(intent.idempotency_key, str)
             or not intent.idempotency_key
             or len(intent.idempotency_key) > 256

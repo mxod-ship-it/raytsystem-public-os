@@ -184,8 +184,14 @@ class SkillForkRequest(VersionedApiRequest):
     expected_source_sha256: Sha256Digest
 
 
-class SkillCreatePreviewRequest(VersionedApiRequest):
+class SkillCreatePreviewRequest(BaseModel):
+    """Validate proposed content for a brand-new skill without writing."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+    request_version: Literal["1.0"] = "1.0"
     new_skill_id: SkillIdentifier
+    content: str = Field(min_length=1, max_length=64 * 1024)
     expected_catalog_sha256: Sha256Digest
 
 

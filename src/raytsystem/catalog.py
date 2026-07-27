@@ -23,6 +23,7 @@ from raytsystem.contracts import (
     canonical_json_bytes,
     sha256_hex,
 )
+from raytsystem.platform_runtime import normalize_crlf_bytes
 from raytsystem.security.paths import PathPolicyError, read_regular_file
 from raytsystem.security.sensitivity import SecretScanner
 from raytsystem.storage import IntegrityError
@@ -393,7 +394,7 @@ class CatalogService:
     @staticmethod
     def _decode(data: bytes, relative: str) -> str:
         try:
-            return data.replace(b"\r\n", b"\n").decode("utf-8")
+            return normalize_crlf_bytes(data).decode("utf-8")
         except UnicodeDecodeError as error:
             raise CatalogError(f"Catalog text is not UTF-8: {relative}") from error
 
@@ -402,7 +403,7 @@ class CatalogService:
         # ponytail: Windows editors/files use CRLF; normalize so cross-platform
         # SKILL.md files parse. source_sha256 is computed from the raw bytes
         # elsewhere, so this does not change identity/hashes.
-        data = data.replace(b"\r\n", b"\n")
+        data = normalize_crlf_bytes(data)
         if not data.startswith(b"---\n"):
             raise CatalogError("Skill must start with YAML frontmatter")
         boundary = data.find(b"\n---\n", 4)

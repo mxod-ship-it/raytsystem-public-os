@@ -1424,11 +1424,10 @@ def create_app(
         payload: SkillCreatePreviewRequest,
         _idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
         _session: Annotated[SessionRecord, Depends(require_session)],
-        content: str = "",
     ) -> dict[str, Any]:
         return skill_authoring.preview_create(
             payload.new_skill_id,
-            content=content,
+            content=payload.content,
             expected_catalog_sha256=payload.expected_catalog_sha256,
         )
 

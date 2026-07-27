@@ -23,6 +23,7 @@ from raytsystem.contracts import (
     sha256_hex,
 )
 from raytsystem.contracts.evidence import SegmentLocator
+from raytsystem.platform_runtime import build_sandbox_env, normalize_crlf_text
 
 
 class ExtractionError(RuntimeError):
@@ -59,7 +60,7 @@ def _normalized_text(data: bytes) -> str:
         decoded = data.decode("utf-8")
     except UnicodeDecodeError as error:
         raise ExtractionError("Extractor accepts UTF-8 input only") from error
-    return unicodedata.normalize("NFC", decoded.replace("\r\n", "\n").replace("\r", "\n"))
+    return unicodedata.normalize("NFC", normalize_crlf_text(decoded))
 
 
 class NativeTextExtractor:
@@ -483,8 +484,7 @@ class PdfExtractor:
 
     def extract(self, data: bytes, *, source_path: str) -> Extraction:
         del source_path
-        environment = os.environ.copy()
-        environment.update({
+        environment = build_sandbox_env({
             "PYTHONHASHSEED": "0",
             "PYTHONIOENCODING": "utf-8",
             "NO_PROXY": "*",
@@ -526,7 +526,7 @@ class PdfExtractor:
         for page_index, page_text in enumerate(pages):
             normalized = unicodedata.normalize(
                 "NFC",
-                page_text.replace("\r\n", "\n").replace("\r", "\n"),
+                normalize_crlf_text(page_text),
             ).strip()
             if not normalized:
                 continue

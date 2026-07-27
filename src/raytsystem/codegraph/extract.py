@@ -5,7 +5,6 @@ import base64
 import importlib
 import io
 import json
-import os
 import posixpath
 import re
 import subprocess
@@ -35,6 +34,7 @@ from raytsystem.codegraph.security import (
     sanitize_metadata,
 )
 from raytsystem.contracts import canonical_json_bytes, derive_id, sha256_hex
+from raytsystem.platform_runtime import build_sandbox_env
 
 EXTRACTOR_NAME = "raytsystem_codegraph"
 EXTRACTOR_VERSION = "1.2.0"
@@ -1250,11 +1250,7 @@ def extract_file_isolated(
         "max_edges": max_edges,
         "timeout_seconds": timeout_seconds,
     }
-    environment = os.environ.copy()
-    environment.update({
-        "LANG": "C.UTF-8",
-        "PYTHONHASHSEED": "0",
-    })
+    environment = build_sandbox_env({"LANG": "C.UTF-8", "PYTHONHASHSEED": "0"})
     try:
         completed = subprocess.run(
             (sys.executable, "-I", "-m", "raytsystem.codegraph.worker"),

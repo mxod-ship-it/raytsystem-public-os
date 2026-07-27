@@ -1,6 +1,6 @@
 # TODO — задачи и планы
 
-Последнее обновление: 2026-07-27
+Последнее обновление: 2026-07-27 (Skill CRUD + архитектурный рефакторинг)
 
 ---
 
@@ -31,9 +31,9 @@
 
 ### Skill CRUD
 
-- [ ] **Create from scratch** — `POST /api/v1/skills` + `SkillAuthoringService.create_blank()` + UI-форма с шаблоном frontmatter
-- [ ] **Delete** — `DELETE /api/v1/skills/{id}` + `SkillAuthoringService.delete()` + confirm dialog в UI
-- [ ] Edit/Save уже работает (`POST /api/v1/skills/{id}/save` + `SkillEditor`)
+- [x] **Create from scratch** — ✅ *сделано 2026-07-27.* `POST /api/v1/skills` + `SkillAuthoringService.create_blank()` + UI-форма с полным шаблоном frontmatter в `SkillCreatePanel.tsx`.
+- [x] **Delete** — ✅ *сделано 2026-07-27.* `POST /api/v1/skills/{id}/archive` (soft delete → `ops/deleted-skills/`) + confirm dialog в UI. Hard delete не делается — инвариант AGENTS.md.
+- [x] Edit/Save уже работает (`POST /api/v1/skills/{id}/save` + `SkillEditor`)
 
 ---
 
@@ -41,11 +41,11 @@
 
 ### Архитектура (рефакторинг)
 
-- [ ] **`rebuild_sqlite_atomic(path, builder_fn)`** — вынести повторяющийся паттерн tempfile → write → close → gc.collect → atomic_replace в один хелпер. Сейчас 3 копии: `documents/index.py`, `search.py`, `execution/store.py`
-- [ ] **`_normalize_crlf(data: bytes)`** — вынести в platform_runtime. Сейчас `.replace(b"\r\n", b"\n")` в 4+ местах
-- [ ] **`build_sandbox_env()`** — хелпер для worker subprocess env в platform_runtime. Сейчас 2 копии (extract.py, extractors.py)
-- [ ] **Вынести `_ScopedConnection`** из search.py и documents/index.py в platform_runtime.py (дублирование)
-- [ ] **Уменьшить retry count** в `atomic_replace` с 20 до 5-8 (worst case ~21s → ~5s)
+- [x] **`rebuild_sqlite_atomic(path, builder_fn)`** — ✅ *сделано 2026-07-27.* Helper в `platform_runtime.py` принимает callback для schema/populate/metadata/integrity_check. Заменены rebuild в `documents/index.py` и `search.py`.
+- [x] **`_normalize_crlf(data: bytes)`** — ✅ *сделано 2026-07-27.* В platform_runtime добавлены `normalize_crlf_bytes` и `normalize_crlf_text`. Заменены 5 мест.
+- [x] **`build_sandbox_env()`** — ✅ *сделано 2026-07-27.* В platform_runtime, заменены 2 копии (`codegraph/extract.py`, `extractors.py`).
+- [x] **Вынести `_ScopedConnection`** — ✅ *сделано 2026-07-27.* В platform_runtime как `ScopedConnection` (public). Удалены дубликаты из `documents/index.py` и `search.py`, импортируется как `_ScopedConnection` alias.
+- [x] **Уменьшить retry count** в `atomic_replace` с 20 до 5-8 — ✅ *сделано 2026-07-27.* Поставлено 8. Worst-case: ~1.8s.
 
 ### Агенты
 

@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArrowLeft,
   CheckCircle2,
   ClipboardCheck,
@@ -19,7 +20,7 @@ import { Dialog } from "../components/Dialog";
 import { Surface, SurfaceContent, SurfaceTabs, type SurfaceTab } from "../components/SurfaceTabs";
 import { EmptyState, ErrorState, LoadingState, StatusPill } from "../components/StatePanel";
 import { catalogDescription, localizedCatalogLabel, roleLabel, statusLabel } from "../presentation";
-import { useSkillDetail } from "../skillHooks";
+import { useSkillArchive, useSkillDetail } from "../skillHooks";
 import type { SkillWriteResult } from "../types";
 import { SkillEditor } from "./SkillEditor";
 import { SkillForkPanel } from "./SkillForkPanel";
@@ -66,6 +67,7 @@ interface SkillDetailViewProps {
   onBack: () => void;
   onRevisionChanged: (result: SkillWriteResult) => void;
   onForkCreated: (result: SkillWriteResult) => void;
+  onArchived: (archivePath: string) => void;
 }
 
 function DetailList({ rows }: { rows: Array<[string, React.ReactNode]> }) {
@@ -77,9 +79,11 @@ export function SkillDetailView({
   expectedCatalogSha256,
   onBack,
   onRevisionChanged,
-  onForkCreated
+  onForkCreated,
+  onArchived
 }: SkillDetailViewProps) {
   const detailQuery = useSkillDetail(skillId, expectedCatalogSha256);
+  const archiveMutation = useSkillArchive();
   const [activeTab, setActiveTab] = useState<SkillDetailTab>("overview");
   const [instructionMode, setInstructionMode] = useState<InstructionMode>("preview");
   const [editing, setEditing] = useState(false);
@@ -87,6 +91,7 @@ export function SkillDetailView({
   const [forking, setForking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [backConfirmOpen, setBackConfirmOpen] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const editButtonRef = useRef<HTMLButtonElement | null>(null);
   const forkButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -153,6 +158,7 @@ export function SkillDetailView({
           <button className="secondary-button" type="button" onClick={requestBack}><ArrowLeft size={15} />К списку</button>
           {policy.editable && detail.content !== null ? <button ref={editButtonRef} className="primary-button" type="button" onClick={() => { setActiveTab("instruction"); setEditing(true); setForking(false); }}><Pencil size={15} />Редактировать</button> : null}
           {!policy.editable && policy.forkable ? <button ref={forkButtonRef} className="primary-button" type="button" onClick={() => { setForking(true); setEditing(false); }}><Copy size={15} />Создать локальную копию</button> : null}
+          {policy.editable ? <button className="danger-button" type="button" onClick={() => { archiveMutation.reset(); setArchiveConfirmOpen(true); }}><Archive size={15} />Архивировать</button> : null}
         </div>
       </section>
 
@@ -254,6 +260,34 @@ export function SkillDetailView({
           <header><div><span className="eyebrow">Несохранённые изменения</span><h2 id="leave-skill-title">Вернуться к списку без сохранения?</h2></div></header>
           <p id="leave-skill-description">Изменённый Markdown не был записан. Skill и его история остались без изменений.</p>
           <footer><button type="button" data-dialog-cancel onClick={() => setBackConfirmOpen(false)}>Продолжить редактирование</button><button className="danger-button" type="button" onClick={onBack}>Вернуться без сохранения</button></footer>
+        </Dialog>
+      ) : null}
+      {archiveConfirmOpen ? (
+        <Dialog className="small-modal panel" role="alertdialog" labelledBy="archive-skill-title" describedBy="archive-skill-description" closeOnBackdrop={false} initialFocus="cancel" onClose={() => setArchiveConfirmOpen(false)}>
+          <header><div><span className="eyebrow">Soft delete</span><h2 id="archive-skill-title">Архивировать {skill.skill_id}?</h2></div></header>
+          <p id="archive-skill-description">Файл будет перенесён в <code>ops/deleted-skills/</code>. Запись удалится из каталога. Восстановимо вручную. Эта операция необратима без ручного вмешательства.</p>
+          {archiveMutation.isError ? <ErrorState error={archiveMutation.error} /> : null}
+          <footer>
+            <button type="button" data-dialog-cancel onClick={() => setArchiveConfirmOpen(false)}>Отмена</button>
+            <button
+              className="danger-button"
+              type="button"
+              disabled={archiveMutation.isPending}
+              onClick={() => {
+                void archiveMutation.mutateAsync({
+                  skillId: skill.skill_id,
+                  expectedCatalogSha256: detail.catalog_sha256,
+                  expectedSourceSha256: skill.source_sha256,
+                  idempotencyKey: crypto.randomUUID()
+                }).then((result) => {
+                  setArchiveConfirmOpen(false);
+                  onArchived(result.archive_path);
+                }).catch(() => undefined);
+              }}
+            >
+              {archiveMutation.isPending ? "Архивируем…" : "Архивировать безвозвратно"}
+            </button>
+          </footer>
         </Dialog>
       ) : null}
     </div>
